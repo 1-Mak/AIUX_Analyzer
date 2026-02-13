@@ -104,6 +104,12 @@ PERSONA_CONTEXT = {
         "name_ru": "Преподаватель",
         "description": "Experienced user managing content",
         "description_ru": "Опытный пользователь, работает с контентом"
+    },
+    "parent": {
+        "name": "Parent",
+        "name_ru": "Родитель абитуриента",
+        "description": "Helping child choose a university",
+        "description_ru": "Помогает ребёнку с выбором вуза, низкий уровень техграмотности"
     }
 }
 
