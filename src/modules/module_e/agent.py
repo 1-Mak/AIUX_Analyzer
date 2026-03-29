@@ -76,6 +76,28 @@ class ModuleE:
 
         return self.report_data
 
+    def generate_pdf_report(self, output_filename: str = "ux_audit_report.pdf") -> Path:
+        """
+        Generate PDF report (via Playwright headless Chrome).
+
+        Args:
+            output_filename: Output filename for PDF report
+
+        Returns:
+            Path to generated PDF file
+        """
+        if not self.report_data:
+            self.generate_report()
+
+        html_generator = HTMLReportGenerator(self.report_data)
+        pdf_path = self.session_dir / output_filename
+        html_path = self.session_dir / output_filename.replace(".pdf", ".html")
+
+        html_generator.save_pdf(pdf_path, html_path=html_path)
+        print(f"    PDF report saved: {pdf_path.name}")
+
+        return pdf_path
+
     def generate_html_report(self, output_filename: str = "ux_audit_report.html") -> Path:
         """
         Generate HTML report

@@ -45,6 +45,8 @@ class ActionExecutor:
         handlers = {
             "click": self._handle_click,
             "type": self._handle_type,
+            "press_enter": self._handle_press_enter,
+            "hover": self._handle_hover,
             "scroll_down": self._handle_scroll_down,
             "scroll_up": self._handle_scroll_up,
             "wait": self._handle_wait,
@@ -89,33 +91,31 @@ class ActionExecutor:
         if not target:
             return {"status": "failure", "error": "No target specified for click"}
 
-        target_str = str(target)
+        target_str = str(target).strip()
 
-        # Strategy 1: Try as data-audit-id
-        selector = f'[data-audit-id="{target_str}"]'
-        success = await self.helper.click_element(selector)
+        # Build selector list in priority order
+        selectors = []
 
-        if success:
-            logger.info(f"Click success with data-audit-id: {target_str}")
-            await asyncio.sleep(0.5)  # Wait for potential page changes
-            return {"status": "success", "selector_used": selector}
+        # Strategy 1: data-audit-id attribute (always safe)
+        selectors.append(f'[data-audit-id="{target_str}"]')
 
-        # Strategy 2: Try as id attribute
-        selector = f'#{target_str}'
-        success = await self.helper.click_element(selector)
+        # Strategy 2: id attribute selector (safe even for numeric IDs, unlike #id)
+        selectors.append(f'[id="{target_str}"]')
 
-        if success:
-            logger.info(f"Click success with id: {target_str}")
-            await asyncio.sleep(0.5)
-            return {"status": "success", "selector_used": selector}
+        # Strategy 3: raw CSS selector — only if it doesn't start with a digit
+        # (#33 is invalid CSS; [id="33"] is used instead)
+        if any(c in target_str for c in ['.', '[', '>']):
+            selectors.append(target_str)
+        elif target_str.startswith('#'):
+            id_val = target_str[1:]
+            selectors.append(f'[id="{id_val}"]')
 
-        # Strategy 3: Try as raw selector (if it looks like one)
-        if any(c in target_str for c in ['.', '#', '[', '>']):
-            success = await self.helper.click_element(target_str)
+        for selector in selectors:
+            success = await self.helper.click_element(selector)
             if success:
-                logger.info(f"Click success with raw selector: {target_str}")
+                logger.info(f"Click success: {selector}")
                 await asyncio.sleep(0.5)
-                return {"status": "success", "selector_used": target_str}
+                return {"status": "success", "selector_used": selector}
 
         logger.warning(f"Click failed for target: {target_str}")
         return {"status": "failure", "error": f"Element not found: {target_str}"}
@@ -133,14 +133,15 @@ class ActionExecutor:
         if not value:
             return {"status": "failure", "error": "No value specified for type"}
 
-        target_str = str(target)
+        target_str = str(target).strip()
 
-        # Try to find the element
+        # Avoid #digit selectors (invalid CSS) — use attribute form instead
         selectors_to_try = [
             f'[data-audit-id="{target_str}"]',
-            f'#{target_str}',
-            target_str  # Raw selector
+            f'[id="{target_str}"]',
+            target_str if any(c in target_str for c in ['.', '[', '>']) else None
         ]
+        selectors_to_try = [s for s in selectors_to_try if s]
 
         for selector in selectors_to_try:
             try:
@@ -157,6 +158,50 @@ class ActionExecutor:
                 continue
 
         return {"status": "failure", "error": f"Input element not found: {target_str}"}
+
+    async def _handle_press_enter(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle press_enter action (submit active element or focused input)
+        """
+        try:
+            await self.helper.page.keyboard.press("Enter")
+            logger.info("Pressed Enter")
+            await asyncio.sleep(1.0)  # Wait for potential navigation
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "failure", "error": str(e)}
+
+    async def _handle_hover(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle hover action (reveal dropdown menus)
+        """
+        target = action.get("target")
+
+        if not target:
+            return {"status": "failure", "error": "No target specified for hover"}
+
+        target_str = str(target).strip()
+
+        selectors_to_try = [
+            f'[data-audit-id="{target_str}"]',
+            f'[id="{target_str}"]',
+            target_str if any(c in target_str for c in ['.', '[', '>']) else None
+        ]
+        selectors_to_try = [s for s in selectors_to_try if s]
+
+        for selector in selectors_to_try:
+            try:
+                element = await self.helper.page.query_selector(selector)
+                if element:
+                    await element.hover()
+                    logger.info(f"Hover success on {selector}")
+                    await asyncio.sleep(0.5)  # Wait for menu to appear
+                    return {"status": "success", "selector_used": selector}
+            except Exception as e:
+                logger.debug(f"Hover attempt failed for {selector}: {e}")
+                continue
+
+        return {"status": "failure", "error": f"Element not found for hover: {target_str}"}
 
     async def _handle_scroll_down(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """

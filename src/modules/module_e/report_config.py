@@ -113,6 +113,40 @@ PERSONA_CONTEXT = {
     }
 }
 
+# Axe accessibility rule translations (English -> Russian)
+AXE_RULES_RU = {
+    "button-name": "Кнопки должны иметь понятный текст",
+    "color-contrast": "Элементы должны иметь достаточный цветовой контраст",
+    "image-alt": "Изображения должны иметь альтернативный текст",
+    "link-name": "Ссылки должны иметь понятный текст",
+    "html-has-lang": "Элемент <html> должен иметь атрибут lang",
+    "html-lang-valid": "Атрибут lang должен содержать допустимое значение",
+    "document-title": "Страница должна иметь заголовок <title>",
+    "label": "Поля форм должны иметь подписи (label)",
+    "input-image-alt": "Кнопки-изображения должны иметь alt-текст",
+    "meta-viewport": "Масштабирование не должно быть отключено",
+    "aria-allowed-attr": "ARIA-атрибуты должны быть допустимыми",
+    "aria-required-attr": "Обязательные ARIA-атрибуты должны быть указаны",
+    "aria-valid-attr": "ARIA-атрибуты должны быть валидными",
+    "aria-roles": "ARIA-роли должны быть валидными",
+    "duplicate-id": "Значения id должны быть уникальными",
+    "heading-order": "Заголовки должны идти в правильном порядке",
+    "list": "Списки должны быть правильно структурированы",
+    "listitem": "Элементы списка должны быть внутри <ul> или <ol>",
+    "region": "Контент должен быть внутри landmark-регионов",
+    "bypass": "Должен быть способ пропустить повторяющийся контент",
+    "tabindex": "tabindex не должен быть больше 0",
+    "frame-title": "Фреймы должны иметь атрибут title",
+    "nested-interactive": "Интерактивные элементы не должны быть вложенными",
+    "select-name": "Выпадающие списки должны иметь подписи",
+}
+
+
+def translate_axe_rule(rule_id: str, fallback: str = "") -> str:
+    """Translate axe rule ID or help text to Russian"""
+    return AXE_RULES_RU.get(rule_id, fallback)
+
+
 # HTML template settings
 HTML_SETTINGS = {
     "theme": "light",

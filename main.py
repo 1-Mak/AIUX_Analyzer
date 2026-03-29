@@ -17,7 +17,8 @@ from src.config import (
     SCREENSHOTS_DIR,
     REPORTS_DIR,
     LOG_FILE,
-    OPENAI_MODEL
+    OPENAI_MODEL,
+    SCENARIO
 )
 from src.utils.playwright_helper import PlaywrightHelper
 from src.utils.image_processor import ImageProcessor
@@ -358,6 +359,13 @@ class UXAuditOrchestrator:
             print(f"  -> Создание HTML отчета...")
             html_path = module_e.generate_html_report()
 
+            print(f"  -> Создание PDF отчета...")
+            try:
+                pdf_path = module_e.generate_pdf_report()
+            except Exception as pdf_err:
+                print(f"  [!] PDF не создан: {pdf_err}")
+                pdf_path = None
+
             # Store results
             self.results["module_e_results"] = {
                 "overall_score": report["overall_score"]["overall"],
@@ -365,7 +373,8 @@ class UXAuditOrchestrator:
                 "issues_count": len(report.get("all_issues", [])),
                 "recommendations_count": len(report.get("recommendations", [])),
                 "json_report": str(self.session_dir / "module_e_final_report.json"),
-                "html_report": str(html_path)
+                "html_report": str(html_path),
+                "pdf_report": str(pdf_path) if pdf_path else None
             }
 
             # Print summary
@@ -373,6 +382,8 @@ class UXAuditOrchestrator:
 
             print(f"  [OK] Module E завершен")
             print(f"      HTML отчет: {html_path}")
+            if pdf_path:
+                print(f"      PDF отчет:  {pdf_path}")
 
         except Exception as e:
             print(f"  [X] Module E завершился с ошибкой: {e}")
@@ -399,20 +410,28 @@ async def main():
         print("\nPlease create a .env file based on .env.example and set your API keys.")
         return
 
-    # Load input configuration
-    # For now, use a default config - later this will be loaded from input.json
-    config = {
-        "url": "https://example.com",
-        "task": "Find product 'Nike Air' and add to cart",
-        "persona": "Elderly User"
-    }
+    # Resolve scenario file: input_s1.json, input_s2.json, input_s3.json
+    # Selected via SCENARIO in .env (e.g. SCENARIO=S1)
+    scenario_file = Path(f"input_{SCENARIO.lower()}.json")
+    fallback_file = Path("input.json")
 
-    # Check if input.json exists
-    input_file = Path("input.json")
-    if input_file.exists():
-        print("Loading configuration from input.json...")
-        with open(input_file, "r", encoding="utf-8") as f:
-            config = json.load(f)
+    if scenario_file.exists():
+        input_file = scenario_file
+    elif fallback_file.exists():
+        print(f"[!] {scenario_file} not found, falling back to input.json")
+        input_file = fallback_file
+    else:
+        print(f"[ERROR] No input file found. Expected: {scenario_file}")
+        return
+
+    print(f"Loading scenario: {input_file}")
+    with open(input_file, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    print(f"  Scenario: {config.get('scenario_id', SCENARIO)}")
+    print(f"  URL:      {config.get('url')}")
+    print(f"  Persona:  {config.get('persona')}")
+    print(f"  Task:     {config.get('task', '')[:80]}...")
 
     # Run audit
     orchestrator = UXAuditOrchestrator(config)

@@ -68,6 +68,8 @@ class ModuleB:
 
         # Action executor will be set during simulation
         self.action_executor: Optional[ActionExecutor] = None
+        self._stuck_recovery_attempts = 0
+        self._max_recovery_attempts = 2
 
         logger.info(f"ModuleB initialized: persona={persona_key}, task='{task[:50]}...', max_steps={max_steps}")
 
@@ -118,11 +120,17 @@ class ModuleB:
                 # OBSERVE - Get current page state
                 state = await self._observe_state(helper, step_id)
 
-                # REASON - Ask LLM for next action
-                llm_decision = await self._reason_next_action(state)
+                # REASON - Ask LLM for next action (pass full context)
+                is_stuck = self.state_tracker.is_stuck()
+                llm_decision = await self._reason_next_action(state, is_stuck=is_stuck)
 
                 # ACT - Execute the decided action
                 action_result = await self._execute_action(llm_decision.get("next_action", {}))
+
+                # Build result summary for history
+                result_summary = self._make_result_summary(
+                    llm_decision.get("next_action", {}), action_result
+                )
 
                 # RECORD - Create and store step record
                 step = self._create_step_record(
@@ -131,19 +139,32 @@ class ModuleB:
                     llm_decision=llm_decision,
                     action_result=action_result
                 )
-                self.state_tracker.add_step(step)
+                self.state_tracker.add_step(step, result_summary)
 
-                # Log step result
+                # Log step result with confidence
                 action_type = llm_decision.get("next_action", {}).get("action_type", "unknown")
+                confidence = llm_decision.get("confidence", 1.0)
                 status_icon = "✓" if action_result.get("status") == "success" else "✗"
-                print(f"{status_icon} {action_type}")
+                conf_str = f" [{int(confidence * 100)}%]" if confidence < 0.6 else ""
+                print(f"{status_icon} {action_type}{conf_str}")
 
                 # CHECK TERMINATION
                 should_stop, reason = self._should_terminate(llm_decision, action_result)
                 if should_stop:
+                    # Stuck: give recovery attempts before terminating
+                    if reason == "stuck_detected" and self._stuck_recovery_attempts < self._max_recovery_attempts:
+                        self._stuck_recovery_attempts += 1
+                        print(f"     [Recovery attempt {self._stuck_recovery_attempts}/{self._max_recovery_attempts}]")
+                        await asyncio.sleep(1.0)
+                        continue
+
                     termination_reason = reason
                     task_status = llm_decision.get("task_status", "unknown")
                     break
+
+                # Reset recovery counter on normal progress
+                if reason is None and self._stuck_recovery_attempts > 0:
+                    self._stuck_recovery_attempts = 0
 
                 # Human-like delay between actions
                 await asyncio.sleep(1.5)
@@ -200,24 +221,28 @@ class ModuleB:
             "title": page_info.get("title", "")
         }
 
-    async def _reason_next_action(self, state: Dict[str, Any], max_retries: int = 2) -> Dict[str, Any]:
+    async def _reason_next_action(self, state: Dict[str, Any], max_retries: int = 2, is_stuck: bool = False) -> Dict[str, Any]:
         """
         Ask LLM to decide next action based on current state
 
         Args:
             state: Current page state
             max_retries: Maximum retry attempts for invalid JSON
+            is_stuck: Whether stuck detection triggered
 
         Returns:
             LLM decision dictionary
         """
-        # Build prompt
+        # Build prompt with full context
         prompt = get_behavioral_prompt(
             persona_key=self.persona_key,
             task=self.task,
             step_history=self.state_tracker.get_step_history_for_llm(),
             current_dom=state.get("dom_snapshot", ""),
-            current_url=state.get("url", "")
+            current_url=state.get("url", ""),
+            visited_urls=self.state_tracker.get_visited_urls(),
+            failed_actions=self.state_tracker.get_failed_actions_summary(),
+            is_stuck=is_stuck
         )
 
         # Call LLM with screenshot
@@ -329,6 +354,38 @@ class ModuleB:
 
         return False, None
 
+    def _make_result_summary(self, action: Dict[str, Any], result: Dict[str, Any]) -> str:
+        """
+        Build a human-readable summary of what happened after an action
+
+        Args:
+            action: Action dictionary from LLM decision
+            result: Execution result dictionary
+
+        Returns:
+            Short description string
+        """
+        action_type = action.get("action_type", "unknown")
+        status = result.get("status", "unknown")
+
+        if status == "success":
+            if action_type == "navigate":
+                return f"перешёл на {result.get('url', action.get('value', ''))}"
+            elif action_type == "click":
+                return "клик выполнен"
+            elif action_type == "type":
+                return f"введено: '{action.get('value', '')}'"
+            elif action_type == "press_enter":
+                return "Enter нажат, ожидаю результат"
+            elif action_type == "hover":
+                return "меню раскрыто"
+            elif action_type == "back":
+                return "вернулся назад"
+            else:
+                return "выполнено"
+        else:
+            return result.get("error", "ошибка выполнения")
+
     def _create_step_record(
         self,
         step_id: int,
@@ -349,16 +406,37 @@ class ModuleB:
             BehaviorStep instance
         """
         next_action = llm_decision.get("next_action", {})
+        hypothesis = llm_decision.get("hypothesis", "")
+        confidence = llm_decision.get("confidence", 1.0)
+        ux_observation = llm_decision.get("ux_observation") or None
+        # Normalise: treat empty string or "null" string as None
+        if ux_observation and ux_observation.strip().lower() in ("null", "none", ""):
+            ux_observation = None
+
+        # Compose agent_thought: analysis + hypothesis + confidence hint
+        thought_parts = []
+        analysis = llm_decision.get("current_state_analysis", "")
+        progress = llm_decision.get("progress_towards_task", "")
+        if analysis:
+            thought_parts.append(analysis)
+        if hypothesis:
+            thought_parts.append(f"Гипотеза: {hypothesis}")
+        if progress:
+            thought_parts.append(progress)
+        if confidence < 0.5:
+            thought_parts.append(f"[низкая уверенность: {int(confidence * 100)}%]")
 
         return BehaviorStep(
             step_id=step_id,
             screenshot=state.get("screenshot_filename", ""),
-            dom_snapshot=state.get("dom_snapshot", "")[:5000],  # Truncate for storage
-            agent_thought=llm_decision.get("current_state_analysis", "") + " " + llm_decision.get("progress_towards_task", ""),
+            dom_snapshot=state.get("dom_snapshot", "")[:5000],
+            agent_thought=" | ".join(thought_parts),
             action_taken=json.dumps(next_action, ensure_ascii=False),
             status="success" if action_result.get("status") == "success" else "failure",
             url=state.get("url", ""),
-            sentiment=llm_decision.get("emotional_state", "NEUTRAL")
+            sentiment=llm_decision.get("emotional_state", "NEUTRAL"),
+            ux_observation=ux_observation
+            # is_backtrack is set by state_tracker.add_step()
         )
 
     def _save_behavioral_log(self) -> None:

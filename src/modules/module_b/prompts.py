@@ -13,18 +13,19 @@ BEHAVIORAL_AGENT_SYSTEM = """Ты {persona_name}, {persona_age} лет.
 
 {persona_system_prompt}
 
-КОНТЕКСТ ПРОЕКТА: Ты используешь веб-сайт.
-
 ТВОЯ ТЕКУЩАЯ ЗАДАЧА: {task}
 
-Ты видишь скриншот текущего состояния страницы и упрощённый DOM с интерактивными элементами.
-Твоя цель - выполнить задачу, действуя как реальный пользователь с твоей персоной.
+{decision_style_block}
 
 {action_space}
 
 {response_format}
 
 {history_context}
+
+{visited_urls_block}
+
+{failed_actions_block}
 """
 
 
@@ -33,45 +34,49 @@ BEHAVIORAL_AGENT_SYSTEM = """Ты {persona_name}, {persona_age} лет.
 # =============================================================================
 
 ACTION_SPACE_DESCRIPTION = """
-🎯 ДОСТУПНЫЕ ДЕЙСТВИЯ:
+ДОСТУПНЫЕ ДЕЙСТВИЯ:
 
 1. **click** - Кликнуть на элемент
-   - target: ID элемента из DOM (число или строка)
+   - target: ID элемента из DOM (data-audit-id или id)
    - Пример: {"action_type": "click", "target": "5", "reasoning": "Клик на нужную ссылку"}
 
 2. **type** - Ввести текст в поле ввода
-   - target: ID поля ввода
-   - value: текст для ввода
-   - Пример: {"action_type": "type", "target": "search-input", "value": "поисковый запрос", "reasoning": "Ввожу поисковый запрос"}
+   - target: ID поля ввода, value: текст
+   - Пример: {"action_type": "type", "target": "search-input", "value": "расписание", "reasoning": "Ввожу запрос"}
 
-3. **scroll_down** - Прокрутить страницу вниз
+3. **press_enter** - Нажать Enter (после ввода текста в поле поиска)
    - Без параметров
-   - Пример: {"action_type": "scroll_down", "reasoning": "Ищу контент ниже на странице"}
+   - Пример: {"action_type": "press_enter", "reasoning": "Отправляю форму поиска"}
 
-4. **scroll_up** - Прокрутить страницу вверх
-   - Без параметров
-   - Пример: {"action_type": "scroll_up", "reasoning": "Возвращаюсь к верхней части страницы"}
+4. **hover** - Навести курсор на элемент (раскрыть выпадающее меню)
+   - target: ID элемента
+   - Пример: {"action_type": "hover", "target": "nav-menu", "reasoning": "Раскрываю выпадающее меню"}
 
-5. **wait** - Подождать загрузки контента
-   - Без параметров
+5. **scroll_down** - Прокрутить страницу вниз
+   - Пример: {"action_type": "scroll_down", "reasoning": "Ищу контент ниже"}
+
+6. **scroll_up** - Прокрутить страницу вверх
+   - Пример: {"action_type": "scroll_up", "reasoning": "Возвращаюсь к меню"}
+
+7. **wait** - Подождать загрузки
    - Пример: {"action_type": "wait", "reasoning": "Жду загрузки страницы"}
 
-6. **navigate** - Перейти на конкретный URL
+8. **navigate** - Перейти на конкретный URL
    - value: полный URL
    - Пример: {"action_type": "navigate", "value": "https://example.com/page/", "reasoning": "Перехожу на нужную страницу"}
 
-7. **back** - Вернуться на предыдущую страницу
-   - Без параметров
-   - Пример: {"action_type": "back", "reasoning": "Возвращаюсь назад, зашёл не туда"}
+9. **back** - Вернуться на предыдущую страницу
+   - Пример: {"action_type": "back", "reasoning": "Зашёл не туда, возвращаюсь"}
 
-8. **task_complete** - Сообщить о завершении задачи
-   - Используй когда задача ВЫПОЛНЕНА
-   - Пример: {"action_type": "task_complete", "reasoning": "Нашёл нужную информацию"}
+10. **task_complete** - Задача выполнена
+    - Используй ТОЛЬКО когда нашёл то, что искал
+    - Пример: {"action_type": "task_complete", "reasoning": "Нашёл нужную информацию"}
 
-⚠️ ВАЖНО:
-- Используй ID элементов из DOM (data-audit-id или id)
-- НЕ придумывай ID, используй только те, что видишь в DOM
-- Если элемент не найден - попробуй прокрутить страницу или найти альтернативу
+ВАЖНО:
+- Используй только ID элементов из DOM (data-audit-id или id) — не придумывай их
+- Если элемент не найден — прокрути или найди альтернативный путь
+- После ввода текста в поиск используй press_enter для отправки
+- hover помогает раскрыть скрытые подменю
 """
 
 
@@ -80,30 +85,52 @@ ACTION_SPACE_DESCRIPTION = """
 # =============================================================================
 
 RESPONSE_FORMAT_TEMPLATE = """
-📤 ФОРМАТ ОТВЕТА (ТОЛЬКО валидный JSON, без комментариев):
+ФОРМАТ ОТВЕТА (ТОЛЬКО валидный JSON, без комментариев):
 
 {
-  "current_state_analysis": "Краткое описание того, что ты видишь на странице (1-2 предложения)",
-  "progress_towards_task": "Насколько близко ты к выполнению задачи (1 предложение)",
+  "current_state_analysis": "Что ты видишь на странице (1-2 предложения)",
+  "hypothesis": "Твоя гипотеза: где скорее всего находится нужная информация и почему",
+  "progress_towards_task": "Насколько близко к цели (1 предложение)",
+  "ux_observation": "Конкретная UX-проблема которую ты замечаешь СЕЙЧАС как пользователь — или null",
   "next_action": {
-    "action_type": "click|type|scroll_down|scroll_up|wait|navigate|back|task_complete",
-    "target": "ID элемента (только для click и type)",
+    "action_type": "click|type|press_enter|hover|scroll_down|scroll_up|wait|navigate|back|task_complete",
+    "target": "ID элемента (только для click, type, hover)",
     "value": "текст или URL (только для type и navigate)",
-    "reasoning": "Почему ты выбрал это действие (1 предложение)"
+    "reasoning": "Почему ты выбрал именно это действие"
   },
   "task_status": "in_progress|completed|blocked",
-  "emotional_state": "POSITIVE|NEUTRAL|NEGATIVE"
+  "emotional_state": "POSITIVE|NEUTRAL|NEGATIVE",
+  "confidence": 0.7
 }
 
-📋 ПОЯСНЕНИЯ К ПОЛЯМ:
-- task_status:
-  - "in_progress" - задача ещё не выполнена, продолжаю работу
-  - "completed" - задача ВЫПОЛНЕНА (нашёл нужную информацию/страницу)
-  - "blocked" - не могу продолжить (ошибка, недоступный элемент, тупик)
-- emotional_state - твоё эмоциональное состояние как пользователя:
-  - POSITIVE - всё понятно, легко ориентируюсь
-  - NEUTRAL - нормально, но есть небольшие затруднения
-  - NEGATIVE - раздражён, запутался, не понимаю интерфейс
+Пояснения:
+- hypothesis: формулируй план — это помогает принимать лучшие решения
+- ux_observation: КОНКРЕТНАЯ проблема интерфейса которая мешает тебе прямо сейчас.
+  Примеры хороших наблюдений:
+    "Нет видимой кнопки поиска в шапке — вынужден угадывать раздел"
+    "Пункт меню 'Студентам' ведёт на страницу без чёткой структуры"
+    "Ссылка на расписание скрыта в подменю, не видна без наведения мыши"
+  Пиши null если нет конкретного наблюдения на этом шаге.
+- task_status: "completed" только если РЕАЛЬНО нашёл нужное, "blocked" если зашёл в тупик
+- emotional_state: POSITIVE (всё понятно) / NEUTRAL (нормально, есть затруднения) / NEGATIVE (запутался, раздражён)
+- confidence: от 0.0 (не знаю что делать) до 1.0 (уверен в следующем шаге)
+"""
+
+
+# =============================================================================
+# STUCK RECOVERY PROMPT ADDITION
+# =============================================================================
+
+STUCK_RECOVERY_BLOCK = """
+ВНИМАНИЕ — ТЫ ЗАСТРЯЛ. Обычный путь не работает. Смени стратегию:
+
+Варианты выхода из тупика (выбери один):
+1. Используй поиск по сайту — введи ключевые слова из задачи
+2. Вернись на главную страницу и начни с другого раздела меню
+3. Попробуй hover на пункты главного меню — там могут быть скрытые подменю
+4. Перейди напрямую по URL если знаешь структуру сайта
+
+НЕ повторяй действия которые уже не сработали.
 """
 
 
@@ -111,41 +138,104 @@ RESPONSE_FORMAT_TEMPLATE = """
 # HELPER FUNCTIONS
 # =============================================================================
 
-def format_step_history(history: List[Dict[str, Any]], max_steps: int = 5) -> str:
+def format_step_history(history: List[Dict[str, Any]], max_steps: int = 6) -> str:
     """
-    Format recent step history for LLM context
+    Format recent step history for LLM context with result summaries
 
     Args:
-        history: List of BehaviorStep dicts or objects
+        history: List of BehaviorStep dicts or objects (from get_step_history_for_llm)
         max_steps: Maximum number of steps to include
 
     Returns:
-        Formatted string with recent actions
+        Formatted string with recent actions and their outcomes
     """
     if not history:
         return "Это твой первый шаг. Начни с изучения страницы."
 
     recent = history[-max_steps:] if len(history) > max_steps else history
 
-    lines = ["📜 ПОСЛЕДНИЕ ДЕЙСТВИЯ:"]
+    lines = ["ПОСЛЕДНИЕ ДЕЙСТВИЯ:"]
     for step in recent:
-        # Handle both dict and object
         if hasattr(step, 'step_id'):
             step_id = step.step_id
             action = step.action_taken
             status = step.status
             url = step.url
+            result = getattr(step, 'result_summary', '')
         else:
             step_id = step.get('step_id', '?')
             action = step.get('action_taken', '?')
             status = step.get('status', '?')
             url = step.get('url', '?')
+            result = step.get('result_summary', '')
 
         status_icon = "✓" if status == "success" else "✗"
-        lines.append(f"  {step_id}. {status_icon} {action} (URL: {url})")
+        result_text = f" → {result}" if result else ""
+        # Shorten URL to path only
+        url_short = url.replace("https://", "").replace("http://", "")[:60]
+        lines.append(f"  {step_id}. {status_icon} {action}{result_text} | {url_short}")
 
-    lines.append(f"\nВсего выполнено шагов: {len(history)}")
+    lines.append(f"\nВсего шагов: {len(history)}")
+    return "\n".join(lines)
 
+
+def format_visited_urls(visited_urls: List[str]) -> str:
+    """
+    Format visited URLs block for the prompt
+
+    Args:
+        visited_urls: List of unique visited URLs
+
+    Returns:
+        Formatted string or empty string if no URLs
+    """
+    if not visited_urls:
+        return ""
+
+    lines = ["УЖЕ ПОСЕЩЁННЫЕ СТРАНИЦЫ (не возвращайся без новой цели):"]
+    for url in visited_urls[-8:]:  # last 8 unique URLs
+        lines.append(f"  - {url}")
+    return "\n".join(lines)
+
+
+def format_failed_actions(failed_actions: List[str]) -> str:
+    """
+    Format failed actions block for the prompt
+
+    Args:
+        failed_actions: List of failed action descriptions
+
+    Returns:
+        Formatted string or empty string if no failures
+    """
+    if not failed_actions:
+        return ""
+
+    lines = ["НЕУДАЧНЫЕ ДЕЙСТВИЯ (не повторяй):"]
+    for action in failed_actions:
+        lines.append(f"  - {action}")
+    return "\n".join(lines)
+
+
+def format_decision_style(persona_key: str) -> str:
+    """
+    Format decision style block for the prompt
+
+    Args:
+        persona_key: Persona key
+
+    Returns:
+        Formatted string with behavioral rules
+    """
+    persona = PERSONAS.get(persona_key, {})
+    decision_style = persona.get("decision_style", [])
+
+    if not decision_style:
+        return ""
+
+    lines = ["КАК ТЫ ПРИНИМАЕШЬ РЕШЕНИЯ (веди себя именно так):"]
+    for rule in decision_style:
+        lines.append(f"  - {rule}")
     return "\n".join(lines)
 
 
@@ -167,22 +257,27 @@ def get_behavioral_prompt(
     task: str,
     step_history: Optional[List[Dict[str, Any]]] = None,
     current_dom: Optional[str] = None,
-    current_url: Optional[str] = None
+    current_url: Optional[str] = None,
+    visited_urls: Optional[List[str]] = None,
+    failed_actions: Optional[List[str]] = None,
+    is_stuck: bool = False
 ) -> str:
     """
     Generate complete prompt for behavioral simulation
 
     Args:
-        persona_key: Persona key (student, applicant, teacher)
+        persona_key: Persona key (student, applicant, teacher, parent)
         task: Task description
         step_history: List of previous BehaviorStep objects/dicts
         current_dom: Simplified DOM of current page
         current_url: Current page URL
+        visited_urls: List of already visited URLs
+        failed_actions: List of failed action descriptions
+        is_stuck: Whether the agent is currently stuck
 
     Returns:
         Complete formatted prompt for LLM
     """
-    # Get persona details
     persona = get_persona_context(persona_key)
 
     if not persona:
@@ -193,38 +288,49 @@ def get_behavioral_prompt(
     persona_system_prompt = persona.get('system_prompt', '')
 
     # Format history context
-    history_context = ""
     if step_history:
         history_context = format_step_history(step_history)
     else:
         history_context = "Это твой первый шаг. Начни с изучения страницы."
 
-    # Add current state context
-    state_context = ""
-    if current_url:
-        state_context += f"\n🌐 ТЕКУЩИЙ URL: {current_url}\n"
+    # Decision style block
+    decision_style_block = format_decision_style(persona_key)
 
-    if current_dom:
-        # Truncate DOM if too long
-        dom_preview = current_dom[:3000] if len(current_dom) > 3000 else current_dom
-        state_context += f"\n📄 УПРОЩЁННЫЙ DOM (интерактивные элементы):\n{dom_preview}\n"
+    # Visited URLs block
+    visited_block = format_visited_urls(visited_urls or [])
+    visited_urls_block = visited_block if visited_block else ""
 
-    # Build final prompt
+    # Failed actions block
+    failed_block = format_failed_actions(failed_actions or [])
+    failed_actions_block = failed_block if failed_block else ""
+
+    # Stuck recovery block
+    if is_stuck:
+        history_context = STUCK_RECOVERY_BLOCK + "\n\n" + history_context
+
+    # Build prompt
     prompt = BEHAVIORAL_AGENT_SYSTEM.format(
         persona_name=persona_name,
         persona_age=persona_age,
         persona_system_prompt=persona_system_prompt,
         task=task,
+        decision_style_block=decision_style_block,
         action_space=ACTION_SPACE_DESCRIPTION,
         response_format=RESPONSE_FORMAT_TEMPLATE,
-        history_context=history_context
+        history_context=history_context,
+        visited_urls_block=visited_urls_block,
+        failed_actions_block=failed_actions_block
     )
 
     # Add current state
-    prompt += state_context
+    if current_url:
+        prompt += f"\nТЕКУЩИЙ URL: {current_url}\n"
 
-    # Add instruction
-    prompt += "\n\n🎯 Проанализируй скриншот и DOM, затем верни JSON с твоим следующим действием."
+    if current_dom:
+        dom_preview = current_dom[:3000] if len(current_dom) > 3000 else current_dom
+        prompt += f"\nУПРОЩЁННЫЙ DOM (интерактивные элементы):\n{dom_preview}\n"
+
+    prompt += "\nПроанализируй скриншот и DOM, затем верни JSON с твоим следующим действием."
 
     return prompt
 
@@ -245,18 +351,21 @@ def get_retry_prompt(original_response: str, error_message: str) -> str:
 Твой ответ был:
 {original_response[:500]}...
 
-Пожалуйста, верни ТОЛЬКО валидный JSON в следующем формате:
+Верни ТОЛЬКО валидный JSON в следующем формате:
 {{
   "current_state_analysis": "...",
+  "hypothesis": "...",
   "progress_towards_task": "...",
+  "ux_observation": null,
   "next_action": {{
-    "action_type": "click|type|scroll_down|scroll_up|wait|navigate|back|task_complete",
+    "action_type": "click|type|press_enter|hover|scroll_down|scroll_up|wait|navigate|back|task_complete",
     "target": "ID элемента (если нужен)",
     "value": "значение (если нужно)",
     "reasoning": "..."
   }},
   "task_status": "in_progress|completed|blocked",
-  "emotional_state": "POSITIVE|NEUTRAL|NEGATIVE"
+  "emotional_state": "POSITIVE|NEUTRAL|NEGATIVE",
+  "confidence": 0.5
 }}
 
 ВАЖНО: Верни ТОЛЬКО JSON, без дополнительного текста или markdown.
@@ -269,6 +378,7 @@ def get_retry_prompt(original_response: str, error_message: str) -> str:
 
 DEFAULT_FALLBACK_ACTION = {
     "current_state_analysis": "Не удалось проанализировать страницу",
+    "hypothesis": "Попробую прокрутить страницу для поиска нужных элементов",
     "progress_towards_task": "Продолжаю исследование",
     "next_action": {
         "action_type": "scroll_down",
@@ -277,26 +387,6 @@ DEFAULT_FALLBACK_ACTION = {
         "reasoning": "Прокручиваю страницу для поиска нужных элементов"
     },
     "task_status": "in_progress",
-    "emotional_state": "NEUTRAL"
+    "emotional_state": "NEUTRAL",
+    "confidence": 0.3
 }
-
-
-if __name__ == "__main__":
-    # Test prompt generation
-    print("Testing prompt generation...\n")
-
-    test_prompt = get_behavioral_prompt(
-        persona_key="student",
-        task="Найти нужную информацию",
-        step_history=[
-            {"step_id": 1, "action_taken": "click on 'Меню'", "status": "success", "url": "https://example.com"}
-        ],
-        current_dom="<a id=\"1\" text=\"Главная\"/>\n<a id=\"2\" text=\"Каталог\"/>",
-        current_url="https://example.com/page/"
-    )
-
-    print("Generated prompt (first 2000 chars):")
-    print(test_prompt[:2000])
-    print("\n" + "="*60)
-
-    print("\n✓ Prompt generation test passed")

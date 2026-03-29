@@ -26,16 +26,32 @@ class StateTracker:
         self.history: List[BehaviorStep] = []
         self.url_history: List[str] = []
         self.action_history: List[str] = []
+        self.result_summaries: List[str] = []  # human-readable result per step
+        self._visited_url_set: set = set()     # for O(1) backtrack lookup
+        self.backtrack_steps: List[int] = []   # step_ids that were backtracks
 
-    def add_step(self, step: BehaviorStep) -> None:
+    def add_step(self, step: BehaviorStep, result_summary: str = "") -> None:
         """
-        Add a step to history
+        Add a step to history. Detects backtracks automatically.
 
         Args:
             step: BehaviorStep object to add
+            result_summary: Human-readable description of what happened
         """
+        # Detect backtrack BEFORE adding this URL to visited set
+        is_backtrack = step.url in self._visited_url_set and len(self._visited_url_set) > 0
+
+        if is_backtrack:
+            self.backtrack_steps.append(step.step_id)
+            logger.debug(f"Backtrack detected at step {step.step_id}: returned to {step.url}")
+
+        # Update step with backtrack flag
+        step.is_backtrack = is_backtrack
+
         self.history.append(step)
         self.url_history.append(step.url)
+        self.result_summaries.append(result_summary)
+        self._visited_url_set.add(step.url)
 
         # Extract action type from action_taken (may be JSON string)
         action_type = self._extract_action_type(step.action_taken)
@@ -151,7 +167,58 @@ class StateTracker:
 
         return summary
 
-    def get_step_history_for_llm(self, max_steps: int = 5) -> List[Dict[str, Any]]:
+    def count_backtracks(self) -> int:
+        """Return total number of backtrack steps"""
+        return len(self.backtrack_steps)
+
+    def get_ux_observations(self) -> List[Dict[str, Any]]:
+        """
+        Collect all non-null UX observations from history
+
+        Returns:
+            List of dicts with step_id, url, observation text
+        """
+        observations = []
+        for step in self.history:
+            if step.ux_observation:
+                observations.append({
+                    "step_id": step.step_id,
+                    "url": step.url,
+                    "observation": step.ux_observation,
+                    "sentiment": step.sentiment or "NEUTRAL",
+                    "is_backtrack": step.is_backtrack or False
+                })
+        return observations
+
+    def get_visited_urls(self) -> List[str]:
+        """
+        Get list of unique visited URLs in visit order
+
+        Returns:
+            Deduplicated list of URLs
+        """
+        return list(dict.fromkeys(self.url_history))
+
+    def get_failed_actions_summary(self, limit: int = 5) -> List[str]:
+        """
+        Get descriptions of recent failed actions
+
+        Args:
+            limit: Maximum number of failures to return
+
+        Returns:
+            List of failure description strings
+        """
+        failed = []
+        for i, step in enumerate(self.history):
+            if step.status == "failure":
+                action_type = self._extract_action_type(step.action_taken)
+                result = self.result_summaries[i] if i < len(self.result_summaries) else ""
+                desc = f"{action_type}: {result}" if result else action_type
+                failed.append(desc)
+        return failed[-limit:]
+
+    def get_step_history_for_llm(self, max_steps: int = 6) -> List[Dict[str, Any]]:
         """
         Get recent step history formatted for LLM context
 
@@ -159,19 +226,22 @@ class StateTracker:
             max_steps: Maximum number of steps to return
 
         Returns:
-            List of step dictionaries
+            List of step dictionaries with result summaries
         """
         recent = self.history[-max_steps:] if len(self.history) > max_steps else self.history
+        offset = len(self.history) - len(recent)
 
-        return [
-            {
+        result = []
+        for i, step in enumerate(recent):
+            idx = offset + i
+            result.append({
                 "step_id": step.step_id,
                 "action_taken": step.action_taken,
                 "status": step.status,
-                "url": step.url
-            }
-            for step in recent
-        ]
+                "url": step.url,
+                "result_summary": self.result_summaries[idx] if idx < len(self.result_summaries) else ""
+            })
+        return result
 
     def get_emotional_trend(self) -> str:
         """

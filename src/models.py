@@ -158,6 +158,14 @@ class BehaviorStep(BaseModel):
         default=None,
         description="Sentiment of agent thought"
     )
+    ux_observation: Optional[str] = Field(
+        default=None,
+        description="Real-time UX problem spotted by the agent on this step"
+    )
+    is_backtrack: Optional[bool] = Field(
+        default=False,
+        description="True if agent returned to a previously visited URL (signal of disorientation)"
+    )
 
 
 class AccessibilityIssue(BaseModel):

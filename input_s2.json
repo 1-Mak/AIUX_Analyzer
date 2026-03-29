@@ -1,0 +1,10 @@
+{
+  "scenario_id": "S2",
+  "url": "https://www.hse.ru",
+  "task": "Найди ссылку на платформу (LMS или SmartLMS), на которой студенты НИУ ВШЭ сдают онлайн-задания, проходят тесты и смотрят учебные материалы от преподавателей. Нужна именно ссылка на систему (edu.hse.ru или аналогичную), а не описание сервиса.",
+  "persona": "student",
+  "max_steps": 20,
+  "use_reasoner": false,
+  "optimal_steps": 4,
+  "min_pages_required": 3
+}

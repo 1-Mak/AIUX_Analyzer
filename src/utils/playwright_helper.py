@@ -125,37 +125,112 @@ class PlaywrightHelper:
 
     async def get_simplified_dom(self) -> str:
         """
-        Get simplified DOM by removing non-interactive elements
+        Get simplified DOM: interactive elements with context, grouped by page section.
+
+        Extracts:
+        - Standard interactive tags (a, button, input, select, textarea)
+        - Custom interactive elements (role=button/link, onclick handlers)
+        - Filters hidden/disabled elements
+        - Groups by page section (header, nav, main, footer)
+        - Includes href, placeholder, aria-label for context
 
         Returns:
-            Simplified HTML string with only interactive elements
+            Structured string with interactive elements grouped by section
         """
-        # JavaScript to extract only interactive elements with IDs
         js_code = """
         () => {
             let counter = 1;
-            const interactiveTags = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL'];
-            const elements = Array.from(document.querySelectorAll('body *'));
 
-            let result = '';
+            function isVisible(el) {
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width === 0 && rect.height === 0) return false;
+                return true;
+            }
 
-            elements.forEach(el => {
-                if (interactiveTags.includes(el.tagName)) {
-                    if (!el.id) {
-                        el.setAttribute('data-audit-id', counter++);
-                    }
+            function isInteractive(el) {
+                const tag = el.tagName;
+                const interactiveTags = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'];
+                if (interactiveTags.includes(tag)) return true;
+                const role = el.getAttribute('role');
+                if (role && ['button', 'link', 'menuitem', 'tab', 'option'].includes(role)) return true;
+                if (el.hasAttribute('onclick') || el.hasAttribute('ng-click') || el.hasAttribute('@click')) return true;
+                if (el.tabIndex >= 0 && !interactiveTags.includes(tag)) return true;
+                return false;
+            }
 
-                    const id = el.id || el.getAttribute('data-audit-id');
-                    const tag = el.tagName.toLowerCase();
-                    const text = el.innerText?.substring(0, 50) || '';
-                    const type = el.getAttribute('type') || '';
-                    const ariaLabel = el.getAttribute('aria-label') || '';
+            function getLabel(el) {
+                const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 60);
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                const placeholder = el.getAttribute('placeholder') || '';
+                const title = el.getAttribute('title') || '';
+                return ariaLabel || text || placeholder || title || '';
+            }
 
-                    result += `<${tag} id="${id}" text="${text}" type="${type}" aria-label="${ariaLabel}"/>\\n`;
+            function serializeEl(el) {
+                if (!isVisible(el)) return null;
+
+                // Assign stable ID
+                if (!el.getAttribute('data-audit-id') && !el.id) {
+                    el.setAttribute('data-audit-id', counter++);
                 }
+                const id = el.id || el.getAttribute('data-audit-id');
+                const tag = el.tagName.toLowerCase();
+                const label = getLabel(el);
+                const href = el.getAttribute('href') || '';
+                const type = el.getAttribute('type') || '';
+                const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+
+                if (disabled) return null;
+                if (!label && !href) return null;
+
+                let attrs = `id="${id}"`;
+                if (label) attrs += ` text="${label.replace(/"/g, "'")}"`;
+                if (href && !href.startsWith('javascript')) attrs += ` href="${href.substring(0, 80)}"`;
+                if (type) attrs += ` type="${type}"`;
+
+                return `  <${tag} ${attrs}/>`;
+            }
+
+            function getSection(el) {
+                let node = el.parentElement;
+                while (node && node !== document.body) {
+                    const tag = node.tagName.toLowerCase();
+                    const role = node.getAttribute('role') || '';
+                    if (['header', 'nav', 'main', 'footer', 'aside'].includes(tag)) return tag;
+                    if (['banner', 'navigation', 'main', 'contentinfo', 'complementary'].includes(role)) return role;
+                    if (node.id && ['header', 'nav', 'menu', 'main', 'content', 'footer'].some(k => node.id.toLowerCase().includes(k))) return node.id;
+                    node = node.parentElement;
+                }
+                return 'page';
+            }
+
+            const elements = Array.from(document.querySelectorAll(
+                'a, button, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [tabindex="0"]'
+            ));
+
+            const sections = {};
+            elements.forEach(el => {
+                const serialized = serializeEl(el);
+                if (!serialized) return;
+                const section = getSection(el);
+                if (!sections[section]) sections[section] = [];
+                sections[section].push(serialized);
             });
 
-            return result;
+            let result = '';
+            const sectionOrder = ['header', 'banner', 'nav', 'navigation', 'main', 'content', 'aside', 'footer', 'contentinfo', 'page'];
+            const allSections = [...sectionOrder.filter(s => sections[s]), ...Object.keys(sections).filter(s => !sectionOrder.includes(s))];
+
+            allSections.forEach(section => {
+                if (!sections[section] || sections[section].length === 0) return;
+                result += `[${section.toUpperCase()}]\\n`;
+                result += sections[section].slice(0, 40).join('\\n');
+                result += '\\n\\n';
+            });
+
+            return result || '(no interactive elements found)';
         }
         """
 
