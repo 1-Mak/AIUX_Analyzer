@@ -16,13 +16,12 @@ class HTMLReportGenerator:
         self.data = report_data
 
     def generate_html(self) -> str:
-        """Generate complete HTML report"""
         return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UX Audit Report - {self.data.get('metadata', {}).get('session_id', 'Report')}</title>
+    <title>UX Audit Report</title>
     <style>
 {self._get_styles()}
     </style>
@@ -32,6 +31,7 @@ class HTMLReportGenerator:
         {self._render_header()}
         {self._render_overall_score()}
         {self._render_executive_summary()}
+        {self._render_behavioral_timeline()}
         {self._render_detailed_findings()}
         {self._render_module_details()}
         {self._render_all_issues_detailed()}
@@ -42,7 +42,6 @@ class HTMLReportGenerator:
 </html>"""
 
     def _get_styles(self) -> str:
-        """Get CSS styles"""
         return """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -157,9 +156,6 @@ class HTMLReportGenerator:
             padding: 20px;
             border: 1px solid #e5e7eb;
         }
-        .summary-box.negative { background: #fef2f2; border-color: #fecaca; }
-        .summary-box.positive { background: #f0fdf4; border-color: #bbf7d0; }
-        .summary-box.warning { background: #fffbeb; border-color: #fde68a; }
         .summary-box h4 { margin-top: 0; }
         .summary-box ul { margin-left: 20px; }
         .summary-box li { margin: 8px 0; }
@@ -179,7 +175,6 @@ class HTMLReportGenerator:
             align-items: center;
             gap: 8px;
         }
-        .critical-section h3::before { content: "!!!"; font-weight: bold; }
         .critical-item {
             background: white;
             border-radius: 8px;
@@ -189,6 +184,15 @@ class HTMLReportGenerator:
         }
         .critical-item .title { font-weight: 600; color: #991b1b; }
         .critical-item .detail { margin-top: 8px; color: #4b5563; }
+        .critical-item .source-tag {
+            font-size: 0.75em;
+            color: white;
+            background: #991b1b;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
 
         /* Module Cards */
         .module-grid {
@@ -286,6 +290,9 @@ class HTMLReportGenerator:
             padding: 2px 8px;
             border-radius: 4px;
             background: #6b7280;
+            white-space: nowrap;
+            flex-shrink: 0;
+            margin-left: 12px;
         }
         .issue-description { color: #4b5563; margin-bottom: 12px; }
         .issue-meta {
@@ -300,6 +307,21 @@ class HTMLReportGenerator:
             padding: 4px 10px;
             border-radius: 4px;
         }
+        .wcag-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .wcag-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.78em;
+            font-weight: 600;
+            font-family: monospace;
+            background: #ede9fe;
+            color: #5b21b6;
+            border: 1px solid #c4b5fd;
+        }
+        .wcag-tag.level-a { background: #dbeafe; color: #1e40af; border-color: #93c5fd; }
+        .wcag-tag.level-aa { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+        .wcag-tag.rule-id { background: #f3f4f6; color: #4b5563; border-color: #d1d5db; }
 
         /* Recommendations */
         .rec-item {
@@ -328,20 +350,9 @@ class HTMLReportGenerator:
         .rec-priority.critical { background: #fee2e2; color: #991b1b; }
         .rec-priority.high { background: #ffedd5; color: #9a3412; }
         .rec-priority.medium { background: #e0e7ff; color: #3730a3; }
-        .rec-category {
-            font-size: 0.85em;
-            color: #6b7280;
-        }
-        .rec-title { font-weight: 600; font-size: 1.1em; margin-bottom: 8px; }
-        .rec-rationale {
-            color: #4b5563;
-            padding: 12px;
-            background: #f9fafb;
-            border-radius: 6px;
-            margin-top: 12px;
-            font-size: 0.9em;
-        }
-        .rec-rationale strong { color: #374151; }
+        .rec-category { font-size: 0.85em; color: #6b7280; }
+        .rec-title { font-weight: 600; font-size: 1.05em; margin-bottom: 8px; }
+        .rec-source { font-size: 0.85em; color: #9ca3af; margin-top: 8px; }
 
         /* Insights */
         .insights-list { margin-top: 16px; }
@@ -362,6 +373,7 @@ class HTMLReportGenerator:
             border-bottom: 1px solid #e5e7eb;
         }
         .timeline-item:last-child { border-bottom: none; }
+        .timeline-item.backtrack { background: #fffbeb; border-radius: 8px; padding: 12px; margin-bottom: 2px; }
         .timeline-step {
             width: 32px;
             height: 32px;
@@ -372,12 +384,35 @@ class HTMLReportGenerator:
             font-weight: 600;
             font-size: 0.9em;
             flex-shrink: 0;
+            background: #e0e7ff;
+            color: #3730a3;
         }
-        .timeline-step.success { background: #dcfce7; color: #166534; }
-        .timeline-step.failure { background: #fee2e2; color: #991b1b; }
+        .timeline-step.backtrack { background: #fef3c7; color: #92400e; }
+        .timeline-step.negative { background: #fee2e2; color: #991b1b; }
         .timeline-content { flex: 1; }
-        .timeline-action { font-weight: 500; }
-        .timeline-detail { color: #6b7280; font-size: 0.9em; margin-top: 4px; }
+        .timeline-action { font-weight: 500; font-size: 0.95em; }
+        .timeline-detail { color: #6b7280; font-size: 0.85em; margin-top: 4px; }
+        .timeline-url { color: #9ca3af; font-size: 0.8em; margin-top: 2px; word-break: break-all; }
+        .timeline-ux-obs {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: #fef2f2;
+            border-left: 3px solid #ef4444;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.85em;
+            color: #991b1b;
+        }
+        .timeline-backtrack-badge {
+            display: inline-block;
+            font-size: 0.75em;
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fcd34d;
+            padding: 1px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
 
         /* Footer */
         .footer {
@@ -387,17 +422,66 @@ class HTMLReportGenerator:
             font-size: 0.9em;
         }
 
-        /* Print */
+        /* Print / PDF */
         @media print {
-            body { background: white; font-size: 12px; }
+            @page {
+                size: A4;
+                margin: 18mm 15mm 18mm 15mm;
+            }
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            body { background: white !important; font-size: 11pt; color: #1f2937; }
             .container { max-width: none; padding: 0; }
-            .card { box-shadow: none; border: 1px solid #e5e7eb; page-break-inside: avoid; }
-            .header { padding: 24px; }
+
+            /* Cards */
+            .card {
+                box-shadow: none !important;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                margin-bottom: 14px;
+                page-break-inside: avoid;
+            }
+
+            /* Header — keep gradient */
+            .header { padding: 24px 20px; border-radius: 6px; page-break-after: avoid; }
+
+            /* Score section — keep on one page */
+            .score-card { page-break-inside: avoid; }
+            .score-breakdown { gap: 24px; }
+
+            /* Issues — allow breaking between groups, not inside items */
+            .issue-item { page-break-inside: avoid; }
+            .issue-group { page-break-inside: avoid; }
+
+            /* Recommendations */
+            .rec-item { page-break-inside: avoid; }
+
+            /* Timeline — allow long timelines to break */
+            .timeline-item { page-break-inside: avoid; }
+
+            /* Critical section */
+            .critical-section { page-break-inside: avoid; }
+            .critical-item { page-break-inside: avoid; }
+
+            /* Module grid — stack on narrow page */
+            .module-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+            /* Remove interactive link styles */
+            a { color: #3b82f6 !important; text-decoration: none; }
+            a[href]:after { content: ""; } /* don't print URLs */
+
+            /* Summary grid */
+            .summary-grid { grid-template-columns: 1fr; }
+
+            /* Footer */
+            .footer { padding: 12px; font-size: 9pt; border-top: 1px solid #e5e7eb; }
+
+            /* Page break hints */
+            h2 { page-break-after: avoid; }
+            .card:nth-child(1) { page-break-before: avoid; }
         }
         """
 
     def _render_header(self) -> str:
-        """Render report header"""
         meta = self.data.get("metadata", {})
         persona = meta.get("persona", {})
 
@@ -406,26 +490,21 @@ class HTMLReportGenerator:
             <h1>UX Audit Report</h1>
             <div class="meta">
                 <div><strong>URL:</strong> {meta.get('url', 'N/A')}</div>
-                <div><strong>Персона:</strong> {persona.get('name', 'N/A')} - {persona.get('description', '')}</div>
+                <div><strong>Персона:</strong> {persona.get('name', 'N/A')} &mdash; {persona.get('description', '')}</div>
                 <div class="task-box">
                     <strong>Задача:</strong> {meta.get('task', 'N/A')}
-                </div>
-                <div style="margin-top: 12px; font-size: 0.9em; opacity: 0.8;">
-                    Session ID: {meta.get('session_id', 'N/A')}
                 </div>
             </div>
         </div>
         """
 
     def _render_overall_score(self) -> str:
-        """Render overall score section with explanation"""
         score = self.data.get("overall_score", {})
         overall = score.get("overall", 0)
         color = score.get("rating_color", "#6b7280")
         label = score.get("rating_label", "N/A")
         breakdown = score.get("breakdown", {})
 
-        # Score description based on rating
         descriptions = {
             "excellent": "Интерфейс демонстрирует отличное качество UX. Минимальные проблемы, высокая доступность.",
             "good": "Хороший уровень UX с некоторыми областями для улучшения. Основной функционал работает корректно.",
@@ -455,6 +534,55 @@ class HTMLReportGenerator:
             </div>
             """
 
+        # Navigation metrics from scenario (reference, not part of weighted score)
+        nav = score.get("navigation_metrics", {})
+        nav_eff = nav.get("navigation_efficiency")
+        pages_cov = nav.get("pages_coverage")
+        optimal = nav.get("optimal_steps")
+        actual = nav.get("actual_steps", 0)
+        min_pages = nav.get("min_pages_required")
+        unique_pages = nav.get("unique_pages", 0)
+        pages_ok = nav.get("pages_ok")
+
+        nav_html = ""
+        if nav_eff is not None:
+            eff_pct = int(nav_eff * 100)
+            eff_color = "#22c55e" if nav_eff >= 0.7 else "#eab308" if nav_eff >= 0.4 else "#ef4444"
+            nav_html += f"""
+            <div class="score-item" title="Оптимальный путь: {optimal} шагов. Фактически: {actual}">
+                <div class="value" style="color: {eff_color};">{eff_pct}%</div>
+                <div class="label">Эффективность</div>
+                <div class="bar">
+                    <div class="bar-fill" style="width: {eff_pct}%; background: {eff_color};"></div>
+                </div>
+                <div style="font-size:0.75em; color:#9ca3af; margin-top:2px;">{actual}/{optimal} шагов</div>
+            </div>
+            """
+        if pages_cov is not None:
+            cov_pct = int(pages_cov * 100)
+            cov_color = "#22c55e" if pages_ok else "#ef4444"
+            nav_html += f"""
+            <div class="score-item" title="Минимум страниц: {min_pages}. Посещено уникальных: {unique_pages}">
+                <div class="value" style="color: {cov_color};">{unique_pages}/{min_pages}</div>
+                <div class="label">Охват страниц</div>
+                <div class="bar">
+                    <div class="bar-fill" style="width: {min(cov_pct,100)}%; background: {cov_color};"></div>
+                </div>
+                <div style="font-size:0.75em; color:#9ca3af; margin-top:2px;">{"выполнено" if pages_ok else "не выполнено"}</div>
+            </div>
+            """
+
+        if nav_html:
+            breakdown_html += f"""
+            <div style="width:100%; border-top: 1px dashed #e5e7eb; margin: 8px 0 0; padding-top: 12px;
+                        display:flex; justify-content:center; gap:40px; flex-wrap:wrap;">
+                <div style="font-size:0.8em; color:#9ca3af; width:100%; text-align:center; margin-bottom:4px;">
+                    Сценарные метрики (справочно)
+                </div>
+                {nav_html}
+            </div>
+            """
+
         return f"""
         <div class="card score-card">
             <div class="score-circle" style="background-color: {color};">
@@ -469,44 +597,36 @@ class HTMLReportGenerator:
         """
 
     def _render_executive_summary(self) -> str:
-        """Render executive summary with details"""
         summary = self.data.get("executive_summary", {})
         points = summary.get("summary_points", [])
         critical = summary.get("critical_findings", [])
         modules_analyzed = summary.get("modules_analyzed", 0)
 
-        points_html = ""
-        for p in points:
-            points_html += f"<li>{p}</li>"
+        points_html = "".join(f"<li>{p}</li>" for p in points)
 
         critical_html = ""
         if critical:
             critical_items = ""
             for c in critical:
-                # Support both old string format and new dict format
                 if isinstance(c, dict):
                     title = c.get("title", "Критическая проблема")
                     detail = c.get("detail", "Требует немедленного внимания")
                     source = c.get("source", "")
-                    source_badge = f'<span style="font-size: 0.8em; color: #6b7280; margin-left: 8px;">({source})</span>' if source else ""
+                    source_tag = f'<span class="source-tag">{source}</span>' if source else ""
                 else:
                     title = c
-                    detail = "Требует немедленного внимания для обеспечения качественного пользовательского опыта."
-                    source_badge = ""
+                    detail = "Требует немедленного внимания."
+                    source_tag = ""
 
                 critical_items += f"""
                 <div class="critical-item">
-                    <div class="title">{title}{source_badge}</div>
+                    <div class="title">{title}{source_tag}</div>
                     <div class="detail">{detail}</div>
                 </div>
                 """
             critical_html = f"""
             <div class="critical-section">
-                <h3>Критические находки</h3>
-                <p style="margin-bottom: 12px; color: #991b1b;">
-                    Обнаружены проблемы, которые существенно влияют на возможность пользователей
-                    достигать своих целей на сайте.
-                </p>
+                <h3>Критические находки ({len(critical)})</h3>
                 {critical_items}
             </div>
             """
@@ -515,22 +635,97 @@ class HTMLReportGenerator:
         <div class="card">
             <h2>Краткое резюме</h2>
             <p style="color: #6b7280; margin-bottom: 16px;">
-                Проанализировано {modules_analyzed} модулей. Ниже представлены ключевые выводы аудита.
+                Проанализировано модулей: {modules_analyzed}. Ниже представлены ключевые выводы аудита.
             </p>
-
             <div class="summary-grid">
                 <div class="summary-box">
                     <h4>Основные выводы</h4>
                     <ul>{points_html}</ul>
                 </div>
             </div>
-
             {critical_html}
         </div>
         """
 
+    def _render_behavioral_timeline(self) -> str:
+        timeline = self.data.get("behavioral_timeline", [])
+        if not timeline:
+            return ""
+
+        # Translate action types
+        action_labels = {
+            "click": "Клик",
+            "scroll": "Скролл",
+            "type": "Ввод текста",
+            "navigate": "Переход",
+            "hover": "Наведение",
+            "unknown": "Действие",
+        }
+
+        items_html = ""
+        for step in timeline:
+            step_id = step.get("step_id", 0)
+            action_type = step.get("action_type", "unknown")
+            target = step.get("action_target", "")
+            reasoning = step.get("reasoning", "")
+            url = step.get("url", "")
+            sentiment = step.get("sentiment", "NEUTRAL")
+            ux_observation = step.get("ux_observation")
+            is_backtrack = step.get("is_backtrack", False)
+
+            label = action_labels.get(action_type, action_type)
+            target_text = f" &rarr; {target}" if target else ""
+
+            # Step circle style
+            step_class = "backtrack" if is_backtrack else ("negative" if sentiment == "NEGATIVE" else "")
+            item_class = "backtrack" if is_backtrack else ""
+
+            # Backtrack badge
+            backtrack_badge = '<span class="timeline-backtrack-badge">возврат</span>' if is_backtrack else ""
+
+            # UX observation block
+            ux_html = ""
+            if ux_observation:
+                ux_html = f'<div class="timeline-ux-obs">UX: {ux_observation}</div>'
+
+            items_html += f"""
+            <div class="timeline-item {item_class}">
+                <div class="timeline-step {step_class}">{step_id}</div>
+                <div class="timeline-content">
+                    <div class="timeline-action">{label}{target_text}{backtrack_badge}</div>
+                    {f'<div class="timeline-detail">{reasoning}</div>' if reasoning else ''}
+                    {f'<div class="timeline-url">{url}</div>' if url else ''}
+                    {ux_html}
+                </div>
+            </div>
+            """
+
+        summaries = self.data.get("module_summaries", {})
+        module_b = summaries.get("module_b", {})
+        status = module_b.get("task_status", "")
+        total = module_b.get("total_steps", len(timeline))
+
+        status_labels = {
+            "completed": "Задача выполнена",
+            "failed": "Задача не выполнена",
+            "max_steps_reached": "Лимит шагов достигнут",
+            "partial": "Частично выполнена"
+        }
+        status_text = status_labels.get(status, status)
+
+        return f"""
+        <div class="card">
+            <h2>Путь пользователя ({total} шагов)</h2>
+            <p style="color: #6b7280; margin-bottom: 8px;">
+                Результат: <strong>{status_text}</strong>
+            </p>
+            <div class="timeline">
+                {items_html}
+            </div>
+        </div>
+        """
+
     def _render_detailed_findings(self) -> str:
-        """Render detailed findings from Module D insights"""
         summaries = self.data.get("module_summaries", {})
         module_d = summaries.get("module_d", {})
         insights = module_d.get("insights", [])
@@ -538,15 +733,21 @@ class HTMLReportGenerator:
         if not insights:
             return ""
 
-        insights_html = ""
+        # Strip emoji prefixes for cleaner look
+        clean_insights = []
         for insight in insights:
-            insights_html += f'<div class="insight-item">{insight}</div>'
+            clean = insight.lstrip("+-~!@#$%^&*() \t")
+            for emoji_prefix in ["->", "=>", "-->", "==>", "!!!"]:
+                clean = clean.lstrip(emoji_prefix).strip()
+            clean_insights.append(clean)
+
+        insights_html = "".join(f'<div class="insight-item">{i}</div>' for i in clean_insights)
 
         return f"""
         <div class="card">
-            <h2>Детальный анализ пользовательского опыта</h2>
+            <h2>Анализ пользовательского опыта</h2>
             <p style="color: #6b7280; margin-bottom: 16px;">
-                На основе анализа эмоционального состояния и поведения пользователя выявлены следующие паттерны:
+                На основе анализа эмоционального состояния и поведения пользователя:
             </p>
             <div class="insights-list">
                 {insights_html}
@@ -555,11 +756,10 @@ class HTMLReportGenerator:
         """
 
     def _render_module_details(self) -> str:
-        """Render detailed module summaries"""
         summaries = self.data.get("module_summaries", {})
         cards_html = ""
 
-        # Module A - Visual
+        # Module A
         if "module_a" in summaries:
             m = summaries["module_a"]
             severity = m.get("severity", {})
@@ -594,7 +794,7 @@ class HTMLReportGenerator:
             </div>
             """
 
-        # Module B - Behavioral
+        # Module B
         if "module_b" in summaries:
             m = summaries["module_b"]
             status_labels = {
@@ -603,7 +803,56 @@ class HTMLReportGenerator:
                 "max_steps_reached": ("Прервана (лимит шагов)", "#ea580c"),
                 "partial": ("Частично выполнена", "#ca8a04")
             }
-            status, color = status_labels.get(m.get('task_status'), ("Неизвестно", "#6b7280"))
+            status_text, color = status_labels.get(m.get('task_status'), ("Неизвестно", "#6b7280"))
+
+            reason = m.get("termination_reason", "")
+            reason_labels = {
+                "max_steps_reached": "Достигнут лимит шагов",
+                "task_completed": "Задача выполнена",
+                "task_failed": "Задача не выполнена",
+                "navigation_error": "Ошибка навигации"
+            }
+            reason_text = reason_labels.get(reason, reason)
+
+            backtrack_count = m.get("backtrack_count", 0)
+            ux_obs_count = m.get("ux_observations_count", 0)
+            backtrack_color = "#dc2626" if backtrack_count >= 3 else "#ea580c" if backtrack_count > 0 else "#16a34a"
+
+            # Navigation efficiency rows
+            nav_eff = m.get("navigation_efficiency")
+            optimal_steps = m.get("optimal_steps")
+            total_steps = m.get("total_steps", 0)
+            unique_pages = m.get("unique_pages", 0)
+            min_pages = m.get("min_pages_required")
+            pages_ok = m.get("pages_ok")
+
+            eff_rows = ""
+            if nav_eff is not None and optimal_steps:
+                eff_pct = int(nav_eff * 100)
+                eff_color = "#16a34a" if nav_eff >= 0.7 else "#ca8a04" if nav_eff >= 0.4 else "#dc2626"
+                eff_rows += f"""
+                    <div class="stat-row">
+                        <span class="stat-label">Эффективность пути</span>
+                        <span class="stat-value" style="color:{eff_color};">{eff_pct}%
+                            <span style="font-weight:400; font-size:0.85em; color:#6b7280;">
+                                ({total_steps} из {optimal_steps} опт.)
+                            </span>
+                        </span>
+                    </div>
+                """
+            if min_pages is not None:
+                pages_color = "#16a34a" if pages_ok else "#dc2626"
+                pages_label = "выполнено" if pages_ok else "не выполнено"
+                eff_rows += f"""
+                    <div class="stat-row">
+                        <span class="stat-label">Охват страниц</span>
+                        <span class="stat-value" style="color:{pages_color};">
+                            {unique_pages} / {min_pages}
+                            <span style="font-weight:400; font-size:0.85em; color:#6b7280;">({pages_label})</span>
+                        </span>
+                    </div>
+                """
+
             cards_html += f"""
             <div class="module-card">
                 <h3>
@@ -613,20 +862,30 @@ class HTMLReportGenerator:
                 <div class="stats">
                     <div class="stat-row">
                         <span class="stat-label">Шагов выполнено</span>
-                        <span class="stat-value">{m.get('total_steps', 0)}</span>
+                        <span class="stat-value">{total_steps}</span>
                     </div>
                     <div class="stat-row">
                         <span class="stat-label">Статус задачи</span>
-                        <span class="stat-value" style="color: {color};">{status}</span>
+                        <span class="stat-value" style="color: {color};">{status_text}</span>
+                    </div>
+                    {eff_rows}
+                    <div class="stat-row">
+                        <span class="stat-label">Возвратов на страницы</span>
+                        <span class="stat-value" style="color: {backtrack_color};">{backtrack_count}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">UX-наблюдений</span>
+                        <span class="stat-value">{ux_obs_count}</span>
                     </div>
                 </div>
                 <div class="description">
-                    <strong>Причина завершения:</strong> {m.get('termination_reason', 'N/A')}
+                    <strong>Причина завершения:</strong> {reason_text}
+                    {f'<br><span style="color: #dc2626;">Высокий бэктрекинг ({backtrack_count} возврата) — признак дезориентации в навигации</span>' if backtrack_count >= 3 else ''}
                 </div>
             </div>
             """
 
-        # Module C - Accessibility
+        # Module C
         if "module_c" in summaries:
             m = summaries["module_c"]
             impact = m.get("by_impact", {})
@@ -661,12 +920,12 @@ class HTMLReportGenerator:
             </div>
             """
 
-        # Module D - Sentiment
+        # Module D
         if "module_d" in summaries:
             m = summaries["module_d"]
             trend_info = {
                 "improving": ("Улучшение", "#16a34a", "Пользователь становился более удовлетворён"),
-                "stable": ("Стабильно", "#6b7280", "Эмоциональное состояние не менялось"),
+                "stable": ("Стабильно", "#6b7280", "Эмоциональное состояние не менялось значительно"),
                 "declining": ("Ухудшение", "#dc2626", "Пользователь испытывал нарастающую фрустрацию")
             }
             trend, trend_color, trend_desc = trend_info.get(m.get('trend'), ("N/A", "#6b7280", ""))
@@ -718,7 +977,6 @@ class HTMLReportGenerator:
         """
 
     def _render_all_issues_detailed(self) -> str:
-        """Render all issues with full details grouped by severity"""
         issues = self.data.get("all_issues", [])
 
         if not issues:
@@ -731,13 +989,10 @@ class HTMLReportGenerator:
             </div>
             """
 
-        # Group issues by severity
         grouped = {}
         for issue in issues:
             sev = issue.get("severity", "medium").lower()
-            if sev not in grouped:
-                grouped[sev] = []
-            grouped[sev].append(issue)
+            grouped.setdefault(sev, []).append(issue)
 
         severity_order = ["critical", "high", "serious", "medium", "moderate", "low", "minor"]
         severity_names = {
@@ -757,27 +1012,44 @@ class HTMLReportGenerator:
 
             issues_html = ""
             for issue in grouped[sev]:
-                source = issue.get("source", "Unknown")
+                source = issue.get("source", "")
+                title = issue.get("title", "")
                 desc = issue.get("description", "")
 
-                # Build metadata
+                # Use title as header, description as body (no duplication)
+                display_title = title if title else desc[:120]
+                display_desc = desc if desc != title else ""
+
+                # Metadata
                 meta_items = []
                 if issue.get("location"):
                     meta_items.append(f"Локация: {issue['location']}")
                 if issue.get("heuristic"):
                     meta_items.append(f"Эвристика: {issue['heuristic']}")
-                if issue.get("wcag"):
-                    meta_items.append(f"WCAG: {issue['wcag']}")
                 if issue.get("affected_nodes"):
                     meta_items.append(f"Затронуто элементов: {issue['affected_nodes']}")
                 if issue.get("emotion"):
                     meta_items.append(f"Эмоция: {issue['emotion']}")
                 if issue.get("step_id"):
                     meta_items.append(f"Шаг #{issue['step_id']}")
+                if issue.get("help_url"):
+                    meta_items.append(f'<a href="{issue["help_url"]}" target="_blank" style="color: #3b82f6;">Подробнее</a>')
 
                 meta_html = "".join(f"<span>{m}</span>" for m in meta_items)
 
-                # Recommendation block if exists
+                # WCAG tags as separate badges
+                wcag_html = ""
+                wcag_tags = issue.get("wcag_tags", [])
+                rule_id = issue.get("rule_id", "")
+                if wcag_tags or rule_id:
+                    tags_html = ""
+                    if rule_id:
+                        tags_html += f'<span class="wcag-tag rule-id">{rule_id}</span>'
+                    for tag in wcag_tags:
+                        level_class = "level-aa" if "aa" in tag else "level-a"
+                        tags_html += f'<span class="wcag-tag {level_class}">{tag.upper()}</span>'
+                    wcag_html = f'<div class="wcag-tags">{tags_html}</div>'
+
                 rec = issue.get("recommendation", "")
                 rec_html = ""
                 if rec:
@@ -790,10 +1062,11 @@ class HTMLReportGenerator:
                 issues_html += f"""
                 <div class="issue-item {sev}">
                     <div class="issue-header">
-                        <div class="issue-title">{desc[:150]}{'...' if len(desc) > 150 else ''}</div>
+                        <div class="issue-title">{display_title}</div>
                         <span class="issue-source">{source}</span>
                     </div>
-                    <div class="issue-description">{desc}</div>
+                    {f'<div class="issue-description">{display_desc}</div>' if display_desc else ''}
+                    {wcag_html}
                     {f'<div class="issue-meta">{meta_html}</div>' if meta_items else ''}
                     {rec_html}
                 </div>
@@ -803,7 +1076,7 @@ class HTMLReportGenerator:
             <div class="issue-group">
                 <div class="issue-group-header">
                     <span class="badge {sev}">{severity_names.get(sev, sev).upper()}</span>
-                    <span style="color: #6b7280;">{len(grouped[sev])} проблем(ы)</span>
+                    <span style="color: #6b7280;">{len(grouped[sev])}</span>
                 </div>
                 {issues_html}
             </div>
@@ -813,7 +1086,7 @@ class HTMLReportGenerator:
         <div class="card">
             <h2>Все выявленные проблемы ({len(issues)})</h2>
             <p style="color: #6b7280; margin-bottom: 20px;">
-                Проблемы сгруппированы по уровню серьёзности. Рекомендуется начать исправление с критических.
+                Проблемы сгруппированы по серьёзности. Рекомендуется начать с критических.
             </p>
             <div class="issues-section">
                 {groups_html}
@@ -822,18 +1095,23 @@ class HTMLReportGenerator:
         """
 
     def _render_recommendations_detailed(self) -> str:
-        """Render detailed recommendations with rationale"""
         recs = self.data.get("recommendations", [])
 
         if not recs:
             return ""
 
-        # Add rationale to recommendations
         rationales = {
             "Доступность": "Проблемы доступности исключают часть пользователей и могут нарушать законодательные требования.",
             "Интерфейс": "Визуальные проблемы влияют на первое впечатление и доверие пользователей к сайту.",
             "Навигация": "Проблемы навигации напрямую влияют на способность пользователей достигать своих целей.",
-            "UX": "Эмоциональный опыт пользователя определяет его лояльность и вероятность повторного визита."
+            "UX": "Эмоциональный опыт пользователя определяет лояльность и вероятность повторного визита."
+        }
+
+        priority_labels_ru = {
+            "critical": "КРИТИЧНО",
+            "high": "ВЫСОКИЙ",
+            "medium": "СРЕДНИЙ",
+            "low": "НИЗКИЙ"
         }
 
         recs_html = ""
@@ -842,18 +1120,16 @@ class HTMLReportGenerator:
             category = rec.get("category", "")
             text = rec.get("text", "")
             source = rec.get("source", "")
-            rationale = rationales.get(category, "Рекомендация основана на комплексном анализе.")
+            priority_label = priority_labels_ru.get(priority, priority.upper())
 
             recs_html += f"""
             <div class="rec-item {priority}">
                 <div class="rec-header">
-                    <span class="rec-category">{category} | {source}</span>
-                    <span class="rec-priority {priority}">{priority.upper()}</span>
+                    <span class="rec-category">{category}</span>
+                    <span class="rec-priority {priority}">{priority_label}</span>
                 </div>
                 <div class="rec-title">{i}. {text}</div>
-                <div class="rec-rationale">
-                    <strong>Почему это важно:</strong> {rationale}
-                </div>
+                <div class="rec-source">{source}</div>
             </div>
             """
 
@@ -861,29 +1137,53 @@ class HTMLReportGenerator:
         <div class="card">
             <h2>Рекомендации по улучшению ({len(recs)})</h2>
             <p style="color: #6b7280; margin-bottom: 20px;">
-                Приоритизированный список действий для улучшения UX. Рекомендуется выполнять в указанном порядке.
+                Приоритизированный список действий. Рекомендуется выполнять в указанном порядке.
             </p>
             {recs_html}
         </div>
         """
 
     def _render_footer(self) -> str:
-        """Render footer"""
-        generated = self.data.get("generated_at", datetime.now().isoformat())
+        generated = self.data.get("generated_at", "")
 
         return f"""
         <div class="footer">
             <p><strong>UX AI Audit System</strong></p>
-            <p>Сгенерировано: {generated}</p>
-            <p style="margin-top: 8px; font-size: 0.85em;">
-                Отчёт создан автоматически на основе анализа модулей A-D.
-            </p>
+            <p>Дата генерации: {generated}</p>
         </div>
         """
 
     def save_html(self, output_path: Path) -> Path:
-        """Save HTML report to file"""
         html = self.generate_html()
         output_path = Path(output_path)
         output_path.write_text(html, encoding="utf-8")
+        return output_path
+
+    def save_pdf(self, output_path: Path, html_path: Path = None) -> Path:
+        """
+        Generate PDF report.
+
+        Saves HTML first (if html_path provided), then converts to PDF via Playwright.
+
+        Args:
+            output_path: Destination PDF path
+            html_path: Optional path for intermediate HTML (defaults to same dir as pdf)
+
+        Returns:
+            Path to generated PDF, or raises RuntimeError on failure
+        """
+        from .pdf_exporter import generate_pdf
+
+        output_path = Path(output_path)
+
+        # Save HTML to a temp location if not specified
+        if html_path is None:
+            html_path = output_path.with_suffix(".html")
+
+        self.save_html(html_path)
+
+        success = generate_pdf(html_path, output_path)
+        if not success:
+            raise RuntimeError(f"PDF generation failed. HTML saved at: {html_path}")
+
         return output_path
