@@ -33,7 +33,9 @@ class ModuleB:
         persona_key: str,
         task: str,
         max_steps: int = 15,
-        api_key: str = None
+        api_key: str = None,
+        success_keywords: list = None,
+        success_url_patterns: list = None
     ):
         """
         Initialize Module B
@@ -49,6 +51,8 @@ class ModuleB:
         self.persona_key = persona_key
         self.task = task
         self.max_steps = max_steps
+        self.success_keywords = [kw.lower() for kw in (success_keywords or [])]
+        self.success_url_patterns = [p.lower() for p in (success_url_patterns or [])]
 
         # Validate persona
         if persona_key not in PERSONAS:
@@ -148,6 +152,13 @@ class ModuleB:
                 conf_str = f" [{int(confidence * 100)}%]" if confidence < 0.6 else ""
                 print(f"{status_icon} {action_type}{conf_str}")
 
+                # AUTO-VERIFY: check success_keywords / success_url_patterns
+                if self._verify_success(state):
+                    print(f"     [Авто-верификация: задача выполнена по ключевым словам]")
+                    termination_reason = "task_completed"
+                    task_status = "completed"
+                    break
+
                 # CHECK TERMINATION
                 should_stop, reason = self._should_terminate(llm_decision, action_result)
                 if should_stop:
@@ -181,7 +192,7 @@ class ModuleB:
                 "total_steps": step_id,
                 "task_status": task_status,
                 "termination_reason": termination_reason,
-                "behavioral_log": [step.dict() for step in self.state_tracker.history]
+                "behavioral_log": [step.model_dump() for step in self.state_tracker.history]
             }
 
             logger.info(f"Simulation complete: {step_id} steps, status={task_status}, reason={termination_reason}")
@@ -354,6 +365,33 @@ class ModuleB:
 
         return False, None
 
+    def _verify_success(self, state: Dict[str, Any]) -> bool:
+        """
+        Auto-verify task completion using success_keywords and success_url_patterns.
+        Returns True if the current page clearly matches the success criteria.
+        """
+        if not self.success_keywords and not self.success_url_patterns:
+            return False
+
+        current_url = state.get("url", "").lower()
+        dom_text = state.get("dom_snapshot", "").lower()
+
+        # URL pattern check
+        if self.success_url_patterns:
+            if any(p in current_url for p in self.success_url_patterns):
+                # URL matches — also require at least one keyword in DOM
+                if not self.success_keywords:
+                    return True
+                if any(kw in dom_text for kw in self.success_keywords):
+                    return True
+
+        # All keywords must be present in DOM text
+        if self.success_keywords:
+            if all(kw in dom_text for kw in self.success_keywords):
+                return True
+
+        return False
+
     def _make_result_summary(self, action: Dict[str, Any], result: Dict[str, Any]) -> str:
         """
         Build a human-readable summary of what happened after an action
@@ -443,7 +481,7 @@ class ModuleB:
         """Save behavioral log to JSON file"""
         output_file = self.session_dir / "module_b_behavioral_log.json"
 
-        behavioral_log = [step.dict() for step in self.state_tracker.history]
+        behavioral_log = [step.model_dump() for step in self.state_tracker.history]
 
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(behavioral_log, f, ensure_ascii=False, indent=2)

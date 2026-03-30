@@ -3,6 +3,9 @@ Module E - Report Generator
 Generates structured reports from all module results
 """
 import json
+import math
+import re
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -19,6 +22,9 @@ from .report_config import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ReportGenerator:
     """Generates comprehensive UX audit reports"""
 
@@ -26,18 +32,19 @@ class ReportGenerator:
         self.session_dir = Path(session_dir)
         self.audit_results = audit_results
         self.report_data = {}
+        self._llm = None  # lazy init
 
     def generate_report(self) -> Dict[str, Any]:
-        self.report_data = {
-            "metadata": self._generate_metadata(),
-            "overall_score": self._calculate_overall_score(),
-            "executive_summary": self._generate_executive_summary(),
-            "module_summaries": self._generate_module_summaries(),
-            "behavioral_timeline": self._generate_behavioral_timeline(),
-            "all_issues": self._collect_all_issues(),
-            "recommendations": self._generate_recommendations(),
-            "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M")
-        }
+        # Build step-by-step so LLM summary can access overall_score
+        self.report_data["metadata"] = self._generate_metadata()
+        self.report_data["behavioral_metrics"] = self._calculate_behavioral_metrics()
+        self.report_data["overall_score"] = self._calculate_overall_score()
+        self.report_data["executive_summary"] = self._generate_executive_summary()
+        self.report_data["module_summaries"] = self._generate_module_summaries()
+        self.report_data["behavioral_timeline"] = self._generate_behavioral_timeline()
+        self.report_data["all_issues"] = self._collect_all_issues()
+        self.report_data["recommendations"] = self._generate_recommendations()
+        self.report_data["generated_at"] = datetime.now().strftime("%d.%m.%Y %H:%M")
         return self.report_data
 
     def _generate_metadata(self) -> Dict[str, Any]:
@@ -82,6 +89,131 @@ class ReportGenerator:
             "in_progress": "max_steps_reached",
         }
         return mapping.get(status, status)
+
+    def _load_behavioral_steps(self) -> List[Dict[str, Any]]:
+        """Load behavioral log steps from Module B output file"""
+        log_file = self.session_dir / "module_b_behavioral_log.json"
+        if not log_file.exists():
+            return []
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _calculate_behavioral_metrics(self) -> Dict[str, Any]:
+        """
+        Calculate 13 formal UX metrics (M1-M13) from module outputs.
+
+        Groups:
+        - Task Effectiveness (M1-M5): completion, steps, efficiency, errors, backtracks
+        - Interface Quality (M6-M9): lostness, visual/accessibility issues
+        - Subjective Experience (M10-M13): sentiment score, trend, pain points, SUS proxy
+        """
+        config = self.audit_results.get("config", {})
+        module_b = self.audit_results.get("module_b_results", {}) or {}
+        module_a = self.audit_results.get("module_a_results", {}) or {}
+        module_c = self.audit_results.get("module_c_results", {}) or {}
+        module_d = self.audit_results.get("module_d_results", {}) or {}
+
+        steps = self._load_behavioral_steps()
+        task_status = self._normalize_task_status(module_b.get("task_status", ""))
+        actual_steps = module_b.get("total_steps", len(steps))
+        optimal_steps = config.get("optimal_steps")
+        min_pages = config.get("min_pages_required")
+
+        # Count from behavioral log
+        error_count = sum(1 for s in steps if s.get("status") == "failure")
+        backtrack_count = sum(1 for s in steps if s.get("is_backtrack"))
+
+        # Unique pages and total page visits (for lostness)
+        urls = [s.get("url", "") for s in steps if s.get("url")]
+        unique_pages = len(set(urls))
+        total_page_visits = len(urls)
+
+        # === M1: Task Completed ===
+        m1_task_completed = task_status == "completed"
+
+        # === M2: Steps to Goal ===
+        m2_steps_to_goal = actual_steps
+
+        # === M3: Relative Efficiency (Bevan VUUM 2008) ===
+        m3_relative_efficiency = None
+        if optimal_steps and actual_steps > 0:
+            m3_relative_efficiency = round(min(optimal_steps / actual_steps, 1.0), 3)
+
+        # === M4: Error Count ===
+        m4_error_count = error_count
+
+        # === M5: Backtrack Count ===
+        m5_backtrack_count = backtrack_count
+
+        # === M6: Lostness (Smith 1996) ===
+        # L = sqrt((N/S - 1)^2 + (R/N - 1)^2)
+        # N = unique pages, S = total page visits, R = min pages required
+        m6_lostness = None
+        if min_pages and unique_pages > 0 and total_page_visits > 0:
+            n_over_s = unique_pages / total_page_visits
+            r_over_n = min_pages / unique_pages
+            m6_lostness = round(math.sqrt((n_over_s - 1) ** 2 + (r_over_n - 1) ** 2), 3)
+
+        # === M7: Visual Issues Count (Module A) ===
+        m7_visual_issues = module_a.get("total_issues", 0) if "error" not in module_a and "skipped" not in module_a else None
+
+        # === M8: Accessibility Issues Count (Module C) ===
+        m8_accessibility_issues = module_c.get("total_issues", 0) if "error" not in module_c and "skipped" not in module_c else None
+
+        # === M9: Critical Issues Count (A + C combined) ===
+        m9_critical = 0
+        if m7_visual_issues is not None:
+            m9_critical += module_a.get("severity_breakdown", {}).get("critical", 0)
+        if m8_accessibility_issues is not None:
+            m9_critical += module_c.get("by_impact", {}).get("critical", 0)
+        m9_critical_issues = m9_critical if (m7_visual_issues is not None or m8_accessibility_issues is not None) else None
+
+        # === M10: Session Score (Module D) ===
+        m10_session_score = module_d.get("session_score") if "error" not in module_d and "skipped" not in module_d else None
+
+        # === M11: Emotional Trend ===
+        m11_trend = module_d.get("trend") if m10_session_score is not None else None
+
+        # === M12: Pain Points Count ===
+        m12_pain_points = module_d.get("pain_points_count", 0) if m10_session_score is not None else None
+
+        # === M13: SUS Proxy ===
+        # Normalized: (session_score + 1) * 50 → scale 0-100
+        m13_sus_proxy = None
+        if m10_session_score is not None:
+            m13_sus_proxy = round((m10_session_score + 1) * 50, 1)
+
+        return {
+            "task_effectiveness": {
+                "M1_task_completed": m1_task_completed,
+                "M2_steps_to_goal": m2_steps_to_goal,
+                "M3_relative_efficiency": m3_relative_efficiency,
+                "M4_error_count": m4_error_count,
+                "M5_backtrack_count": m5_backtrack_count,
+            },
+            "interface_quality": {
+                "M6_lostness": m6_lostness,
+                "M7_visual_issues": m7_visual_issues,
+                "M8_accessibility_issues": m8_accessibility_issues,
+                "M9_critical_issues": m9_critical_issues,
+            },
+            "subjective_experience": {
+                "M10_session_score": m10_session_score,
+                "M11_trend": m11_trend,
+                "M12_pain_points": m12_pain_points,
+                "M13_sus_proxy": m13_sus_proxy,
+            },
+            "reference": {
+                "optimal_steps": optimal_steps,
+                "min_pages_required": min_pages,
+                "unique_pages": unique_pages,
+                "total_page_visits": total_page_visits,
+            }
+        }
 
     def _compute_navigation_metrics(self) -> Dict[str, Any]:
         """
@@ -148,12 +280,32 @@ class ReportGenerator:
             scores["visual"] = max(0, min(1, 1 - deductions / 100))
             weights_used["visual"] = SCORE_WEIGHTS["visual"]
 
-        # Module B score
+        # Module B score — based on behavioral metrics (M3 + M1 + penalties)
         module_b = self.audit_results.get("module_b_results", {})
+        bm = self.report_data.get("behavioral_metrics", {})
         if module_b and "error" not in module_b and "skipped" not in module_b:
-            task_status = self._normalize_task_status(module_b.get("task_status", "failed"))
-            status_scores = {"completed": 1.0, "partial": 0.6, "failed": 0.3, "max_steps_reached": 0.4}
-            scores["behavioral"] = status_scores.get(task_status, 0.5)
+            te = bm.get("task_effectiveness", {})
+            m1 = te.get("M1_task_completed", False)
+            m3 = te.get("M3_relative_efficiency")
+            m4 = te.get("M4_error_count", 0)
+            m5 = te.get("M5_backtrack_count", 0)
+
+            # Base: efficiency if available, else status-based fallback
+            if m3 is not None:
+                base = m3
+            else:
+                task_status = self._normalize_task_status(module_b.get("task_status", "failed"))
+                base = {"completed": 0.8, "partial": 0.5, "failed": 0.2, "max_steps_reached": 0.3}.get(task_status, 0.4)
+
+            # Task completion bonus/penalty
+            if m1:
+                base = min(base + 0.15, 1.0)
+            else:
+                base *= 0.6
+
+            # Error & backtrack penalties (diminishing)
+            penalty = min(m4 * 0.04 + m5 * 0.03, 0.3)
+            scores["behavioral"] = round(max(0, base - penalty), 3)
             weights_used["behavioral"] = SCORE_WEIGHTS["behavioral"]
 
         # Module C score
@@ -212,7 +364,7 @@ class ReportGenerator:
         summary_points = []
         critical_findings = []
 
-        # Module A
+        # Module A — aggregated visual findings
         module_a = self.audit_results.get("module_a_results", {})
         if module_a and "total_issues" in module_a:
             total = module_a["total_issues"]
@@ -220,36 +372,34 @@ class ReportGenerator:
             critical_count = severity.get("critical", 0)
             high = severity.get("high", 0)
 
-            module_a_file = self.session_dir / "module_a_visual_analysis.json"
-            if module_a_file.exists() and (critical_count > 0 or high > 0):
-                try:
-                    with open(module_a_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+            if critical_count > 0 or high > 0:
+                # Collect top heuristic violations for summary
+                top_heuristics = []
+                module_a_file = self.session_dir / "module_a_visual_analysis.json"
+                if module_a_file.exists():
+                    try:
+                        with open(module_a_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
                         for issue in data.get("issues", []):
-                            sev = issue.get("severity", "").lower()
-                            if sev == "critical":
-                                critical_findings.append({
-                                    "title": issue.get("title", "Критическая визуальная проблема"),
-                                    "detail": issue.get("description", "")[:200],
-                                    "source": "Визуальный анализ"
-                                })
-                            elif sev == "high" and len(critical_findings) < 5:
-                                critical_findings.append({
-                                    "title": issue.get("title", "Серьёзная проблема юзабилити"),
-                                    "detail": issue.get("description", "")[:200],
-                                    "source": "Визуальный анализ"
-                                })
-                except Exception:
-                    if critical_count > 0:
-                        critical_findings.append({
-                            "title": f"Найдено {critical_count} критических визуальных проблем",
-                            "detail": "Проблемы требуют немедленного внимания",
-                            "source": "Визуальный анализ"
-                        })
+                            h = issue.get("heuristic", "")
+                            if h and h not in top_heuristics and issue.get("severity", "").lower() in ("critical", "high"):
+                                top_heuristics.append(h)
+                            if len(top_heuristics) >= 3:
+                                break
+                    except Exception:
+                        pass
 
-            if high > 0:
-                summary_points.append(f"Визуальный анализ: {high} серьёзных проблем юзабилити")
-            summary_points.append(f"Всего выявлено {total} проблем интерфейса")
+                detail = f"Критических: {critical_count}, серьёзных: {high}"
+                if top_heuristics:
+                    detail += f". Нарушены эвристики: {'; '.join(top_heuristics)}"
+                critical_findings.append({
+                    "title": f"Интерфейс: {critical_count + high} серьёзных проблем юзабилити",
+                    "detail": detail,
+                    "source": "Визуальный анализ",
+                    "recommendation": "Пересмотреть дизайн критичных элементов с учётом эвристик Нильсена"
+                })
+
+            summary_points.append(f"Визуальный анализ выявил {total} проблем интерфейса (критических: {critical_count}, серьёзных: {high})")
 
         # Module B
         module_b = self.audit_results.get("module_b_results", {})
@@ -264,13 +414,15 @@ class ReportGenerator:
                 critical_findings.append({
                     "title": "Задача не была выполнена",
                     "detail": f"Пользователь не смог достичь цели. Причина: {reason}",
-                    "source": "Поведенческий анализ"
+                    "source": "Поведенческий анализ",
+                    "recommendation": "Упростить навигационный путь к целевому контенту, добавить подсказки и хлебные крошки"
                 })
             elif status == "max_steps_reached":
                 critical_findings.append({
                     "title": f"Задача не завершена за {steps} шагов",
                     "detail": "Навигация слишком сложная — пользователь не нашёл путь к цели",
-                    "source": "Поведенческий анализ"
+                    "source": "Поведенческий анализ",
+                    "recommendation": "Сократить глубину навигации, добавить поиск и быстрые ссылки на ключевые разделы"
                 })
 
             # Navigation efficiency insight
@@ -282,7 +434,8 @@ class ReportGenerator:
                     critical_findings.append({
                         "title": f"Низкая навигационная эффективность: {int(nav_eff * 100)}%",
                         "detail": f"Пользователь затратил {steps} шагов при оптимальных {optimal} — путь в {round(steps / optimal, 1)}× длиннее нормы",
-                        "source": "Поведенческий анализ"
+                        "source": "Поведенческий анализ",
+                        "recommendation": "Уменьшить количество кликов до ключевого контента, рассмотреть реструктуризацию меню"
                     })
                 elif nav_eff < 0.7:
                     summary_points.append(
@@ -301,47 +454,52 @@ class ReportGenerator:
                     f"Охват страниц недостаточен: посещено {unique} из {min_pages} минимально необходимых"
                 )
 
-        # Module C — fix: use "issues" key (actual axe output format)
+        # Module C — aggregated summary instead of per-rule listing
         module_c = self.audit_results.get("module_c_results", {})
         if module_c and "total_issues" in module_c:
             total = module_c["total_issues"]
             by_impact = module_c.get("by_impact", {})
             critical_count = by_impact.get("critical", 0)
             serious = by_impact.get("serious", 0)
+            moderate = by_impact.get("moderate", 0)
 
+            # Count total affected elements from detailed scan
+            total_elements = 0
+            top_rules_ru = []
             module_c_file = self.session_dir / "module_c_accessibility_scan.json"
-            if module_c_file.exists() and (critical_count > 0 or serious > 0):
+            if module_c_file.exists():
                 try:
                     with open(module_c_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        for issue in data.get("issues", data.get("all_issues", [])):
-                            impact = issue.get("impact", "")
-                            occurrences = issue.get("total_occurrences", len(issue.get("nodes", [])))
+                    for issue in data.get("issues", data.get("all_issues", [])):
+                        occ = issue.get("total_occurrences", len(issue.get("nodes", [])))
+                        total_elements += occ
+                        if issue.get("impact") in ("critical", "serious") and len(top_rules_ru) < 3:
                             rule_id = issue.get("id", "")
-                            title_ru = translate_axe_rule(rule_id, issue.get("help", ""))
-                            if impact == "critical":
-                                critical_findings.append({
-                                    "title": title_ru,
-                                    "detail": f"Затронуто элементов: {occurrences}",
-                                    "source": "Аудит доступности"
-                                })
-                            elif impact == "serious" and len(critical_findings) < 7:
-                                critical_findings.append({
-                                    "title": title_ru,
-                                    "detail": f"Затронуто элементов: {occurrences}",
-                                    "source": "Аудит доступности"
-                                })
+                            ru = translate_axe_rule(rule_id)
+                            if ru:
+                                top_rules_ru.append(ru.lower())
                 except Exception:
-                    if critical_count > 0:
-                        critical_findings.append({
-                            "title": f"Найдено {critical_count} критических проблем доступности",
-                            "detail": "Нарушения WCAG требуют немедленного исправления",
-                            "source": "Аудит доступности"
-                        })
+                    pass
 
-            if serious > 0:
-                summary_points.append(f"Доступность: {serious} серьёзных нарушений WCAG")
-            summary_points.append(f"Аудит доступности выявил {total} проблем")
+            if critical_count > 0 or serious > 0:
+                detail_parts = []
+                if critical_count:
+                    detail_parts.append(f"критических: {critical_count}")
+                if serious:
+                    detail_parts.append(f"серьёзных: {serious}")
+                detail = f"Затронуто {total_elements} элементов ({', '.join(detail_parts)})"
+                if top_rules_ru:
+                    detail += f". Основные: {'; '.join(top_rules_ru)}"
+                critical_findings.append({
+                    "title": f"Доступность: {critical_count + serious} критических и серьёзных нарушений WCAG",
+                    "detail": detail,
+                    "source": "Аудит доступности",
+                    "recommendation": "Провести аудит доступности с помощью WAVE/axe и исправить в первую очередь критические нарушения"
+                })
+
+            if total > 0:
+                summary_points.append(f"Аудит доступности выявил {total} проблем ({critical_count} критических, {serious} серьёзных)")
 
         # Module D
         module_d = self.audit_results.get("module_d_results", {})
@@ -351,37 +509,114 @@ class ReportGenerator:
             pain_points = module_d.get("pain_points_count", 0)
 
             if score < -0.3:
-                module_d_file = self.session_dir / "module_d_sentiment_analysis.json"
-                if module_d_file.exists():
-                    try:
-                        with open(module_d_file, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                            for point in data.get("pain_points", [])[:2]:
-                                critical_findings.append({
-                                    "title": f"Фрустрация на шаге #{point.get('step_id', '?')}",
-                                    "detail": point.get("issue", "")[:150],
-                                    "source": "Анализ эмоций"
-                                })
-                    except Exception:
-                        critical_findings.append({
-                            "title": "Негативный эмоциональный опыт пользователя",
-                            "detail": f"Оценка сессии: {score:.2f}",
-                            "source": "Анализ эмоций"
-                        })
+                trend_ru = {"improving": "улучшение", "stable": "стабильно", "declining": "ухудшение"}.get(trend, trend)
+                detail = f"Оценка сессии: {score:+.2f}, тренд: {trend_ru}"
+                if pain_points > 0:
+                    detail += f", болевых точек: {pain_points}"
+                critical_findings.append({
+                    "title": "Негативный эмоциональный опыт пользователя",
+                    "detail": detail,
+                    "source": "Анализ эмоций",
+                    "recommendation": "Провести юзабилити-тестирование с реальными пользователями для выявления причин фрустрации"
+                })
 
             if trend == "declining":
                 summary_points.append("Эмоциональный тренд: ухудшение к концу сессии")
             if pain_points > 0:
                 summary_points.append(f"Выявлено {pain_points} болевых точек")
 
+        modules_analyzed = sum(1 for m in ["module_a", "module_b", "module_c", "module_d"]
+                               if self.audit_results.get(f"{m}_results", {})
+                               and "error" not in self.audit_results.get(f"{m}_results", {})
+                               and "skipped" not in self.audit_results.get(f"{m}_results", {}))
+
+        # Replace rule-based bullet points with LLM-generated summary
+        llm_points = self._llm_generate_summary_points(summary_points, critical_findings)
+        if llm_points:
+            summary_points = llm_points
+
         return {
             "summary_points": summary_points,
             "critical_findings": critical_findings,
-            "modules_analyzed": sum(1 for m in ["module_a", "module_b", "module_c", "module_d"]
-                                    if self.audit_results.get(f"{m}_results", {})
-                                    and "error" not in self.audit_results.get(f"{m}_results", {})
-                                    and "skipped" not in self.audit_results.get(f"{m}_results", {}))
+            "modules_analyzed": modules_analyzed
         }
+
+    def _get_llm(self):
+        """Lazy-init OpenAIHelper for report generation."""
+        if self._llm is None:
+            try:
+                from src.utils.openai_helper import OpenAIHelper
+                from src.config import OPENAI_API_KEY
+                self._llm = OpenAIHelper(api_key=OPENAI_API_KEY)
+            except Exception as e:
+                logger.warning(f"Cannot init LLM for report: {e}")
+        return self._llm
+
+    def _llm_generate_summary_points(
+        self,
+        fallback_points: List[str],
+        critical_findings: List[Dict]
+    ) -> Optional[List[str]]:
+        """Generate executive summary bullet points via LLM. Returns None on failure."""
+        try:
+            llm = self._get_llm()
+            if not llm:
+                return None
+
+            config = self.audit_results.get("config", {})
+            score = self.report_data.get("overall_score", {}) if self.report_data else {}
+            overall_pct = int(score.get("overall", 0) * 100) if score else 0
+            rating_label = score.get("rating_label", "") if score else ""
+
+            module_a = self.audit_results.get("module_a_results", {}) or {}
+            module_b = self.audit_results.get("module_b_results", {}) or {}
+            module_c = self.audit_results.get("module_c_results", {}) or {}
+            module_d = self.audit_results.get("module_d_results", {}) or {}
+
+            task_status_raw = module_b.get("task_status", "")
+            task_status = self._normalize_task_status(task_status_raw)
+            nav = self._compute_navigation_metrics()
+
+            facts = [
+                f"Сайт: {config.get('url', 'N/A')}",
+                f"Задача пользователя: {config.get('task', 'N/A')}",
+                f"Общий UX-балл: {overall_pct}/100 ({rating_label})",
+                f"Задача {'выполнена' if task_status == 'completed' else 'не выполнена'} за {module_b.get('total_steps', '?')} шагов",
+            ]
+            if nav.get("navigation_efficiency") is not None:
+                facts.append(f"Навигационная эффективность: {int(nav['navigation_efficiency'] * 100)}% (оптимум {nav.get('optimal_steps', '?')} шагов)")
+            if module_a.get("total_issues"):
+                facts.append(f"Визуальный анализ: {module_a['total_issues']} проблем (критических: {module_a.get('severity_breakdown', {}).get('critical', 0)})")
+            if module_c.get("total_issues"):
+                by = module_c.get("by_impact", {})
+                facts.append(f"Доступность (WCAG): {module_c['total_issues']} нарушений, критических: {by.get('critical', 0)}, серьёзных: {by.get('serious', 0)}")
+            if module_d.get("session_score") is not None:
+                facts.append(f"Эмоциональный опыт: {module_d.get('trend', 'stable')}, оценка сессии {module_d['session_score']:.2f}, болевых точек: {module_d.get('pain_points_count', 0)}")
+            if critical_findings:
+                top = "; ".join(f['title'] for f in critical_findings[:3])
+                facts.append(f"Топ критических находок: {top}")
+
+            facts_text = "\n".join(f"- {f}" for f in facts)
+            prompt = f"""Ты UX-аналитик. На основе данных аудита напиши 4–6 аналитических тезисов на русском языке.
+Каждый тезис — законченная мысль (1–2 предложения), раскрывающая ключевой вывод для владельца сайта.
+Не пересказывай цифры механически — делай выводы. Не используй маркеры или нумерацию.
+Верни JSON-массив строк: ["тезис 1", "тезис 2", ...]
+
+Данные аудита:
+{facts_text}
+"""
+            response = llm.complete_text(prompt, max_tokens=600)
+            # Extract JSON array
+            if "```json" in response:
+                response = response.split("```json")[1].split("```")[0].strip()
+            elif "```" in response:
+                response = response.split("```")[1].split("```")[0].strip()
+            points = json.loads(response)
+            if isinstance(points, list) and all(isinstance(p, str) for p in points):
+                return points
+        except Exception as e:
+            logger.warning(f"LLM summary generation failed: {e}")
+        return None
 
     def _generate_module_summaries(self) -> Dict[str, Any]:
         summaries = {}
@@ -485,7 +720,7 @@ class ReportGenerator:
                     "step_id": step_id,
                     "action_type": action_type,
                     "action_target": action_target,
-                    "reasoning": step.get("agent_thought", "")[:200],
+                    "reasoning": step.get("agent_thought", ""),
                     "url": step.get("url", ""),
                     "status": step.get("status", ""),
                     "sentiment": step.get("sentiment", "NEUTRAL"),
@@ -607,7 +842,48 @@ class ReportGenerator:
             return SEVERITY_ORDER.index(severity) if severity in SEVERITY_ORDER else 99
 
         all_issues.sort(key=severity_key)
+        all_issues = self._deduplicate_issues(all_issues)
         return all_issues
+
+    def _deduplicate_issues(self, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Remove cross-source duplicate issues using word-overlap (Jaccard similarity).
+        Same source issues are never merged. Within a duplicate pair, keeps higher severity.
+        """
+        severity_rank = {
+            "critical": 0, "high": 1, "serious": 1,
+            "medium": 2, "moderate": 2, "low": 3, "minor": 3
+        }
+
+        def word_set(text: str):
+            return set(re.sub(r'[^\w\s]', '', text.lower()).split())
+
+        def jaccard(a: set, b: set) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+
+        kept: List[Dict[str, Any]] = []
+        for issue in issues:
+            iwords = word_set(issue.get("title", ""))
+            merged = False
+            for idx, existing in enumerate(kept):
+                # Only deduplicate across different sources
+                if issue.get("source") == existing.get("source"):
+                    continue
+                ewords = word_set(existing.get("title", ""))
+                if jaccard(iwords, ewords) >= 0.35:
+                    # Keep higher severity
+                    i_rank = severity_rank.get(issue.get("severity", "medium").lower(), 99)
+                    e_rank = severity_rank.get(existing.get("severity", "medium").lower(), 99)
+                    if i_rank < e_rank:
+                        kept[idx] = issue
+                    merged = True
+                    break
+            if not merged:
+                kept.append(issue)
+
+        return kept
 
     def _generate_recommendations(self) -> List[Dict[str, Any]]:
         recommendations = []

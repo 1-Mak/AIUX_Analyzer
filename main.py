@@ -21,7 +21,6 @@ from src.config import (
     SCENARIO
 )
 from src.utils.playwright_helper import PlaywrightHelper
-from src.utils.image_processor import ImageProcessor
 from src.modules.module_a import ModuleA
 from src.modules.module_b import ModuleB
 from src.modules.module_c import ModuleC
@@ -119,12 +118,6 @@ class UXAuditOrchestrator:
                 path=self.session_dir
             )
 
-            # Add grid overlay
-            print(f"  → Adding grid overlay...")
-            processor = ImageProcessor()
-            grid_screenshot = self.session_dir / "baseline_screenshot_grid.png"
-            processor.add_grid_overlay(screenshot_path, grid_screenshot)
-
             # Get DOM
             print(f"  → Extracting DOM snapshot...")
             dom = await helper.get_dom_snapshot()
@@ -148,7 +141,6 @@ class UXAuditOrchestrator:
             # Store paths in results
             self.results["baseline"] = {
                 "screenshot": str(screenshot_path),
-                "screenshot_grid": str(grid_screenshot),
                 "dom": str(dom_path),
                 "accessibility_tree": str(a11y_path),
                 "simplified_dom": str(simplified_path)
@@ -157,11 +149,10 @@ class UXAuditOrchestrator:
     async def _run_module_a(self):
         """Run Module A - Visual Inspector"""
         try:
-            # Get screenshot with grid overlay
-            grid_screenshot = self.session_dir / "baseline_screenshot_grid.png"
+            screenshot_path = self.session_dir / "baseline_screenshot.png"
 
-            if not grid_screenshot.exists():
-                print("  ⚠ Grid screenshot not found, skipping Module A")
+            if not screenshot_path.exists():
+                print("  ⚠ Screenshot not found, skipping Module A")
                 return
 
             # Initialize Module A
@@ -171,7 +162,7 @@ class UXAuditOrchestrator:
             # Run analysis
             print(f"  → Analyzing UI with persona: {self.persona}...")
             result = module_a.analyze_screenshot(
-                screenshot_path=grid_screenshot,
+                screenshot_path=screenshot_path,
                 persona_name=self.persona,
                 session_dir=self.session_dir
             )
@@ -211,7 +202,9 @@ class UXAuditOrchestrator:
                 session_dir=self.session_dir,
                 persona_key=self.persona,
                 task=self.task,
-                max_steps=self.config.get("max_steps", 15)
+                max_steps=self.config.get("max_steps", 15),
+                success_keywords=self.config.get("success_keywords", []),
+                success_url_patterns=self.config.get("success_url_patterns", [])
             )
 
             print(f"  → Запуск симуляции...")

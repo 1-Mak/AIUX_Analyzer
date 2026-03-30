@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from pathlib import Path
 from datetime import datetime
 
-from .report_config import RATING_THRESHOLDS, ISSUE_ICONS
+from .report_config import RATING_THRESHOLDS, ISSUE_ICONS, METRICS_DISPLAY, METRICS_GROUP_NAMES
 
 
 class HTMLReportGenerator:
@@ -30,6 +30,7 @@ class HTMLReportGenerator:
     <div class="container">
         {self._render_header()}
         {self._render_overall_score()}
+        {self._render_task_metrics()}
         {self._render_executive_summary()}
         {self._render_behavioral_timeline()}
         {self._render_detailed_findings()}
@@ -263,6 +264,10 @@ class HTMLReportGenerator:
         .issue-group-header .badge.high, .issue-group-header .badge.serious { background: #ffedd5; color: #9a3412; }
         .issue-group-header .badge.medium, .issue-group-header .badge.moderate { background: #fef3c7; color: #92400e; }
         .issue-group-header .badge.low, .issue-group-header .badge.minor { background: #dcfce7; color: #166534; }
+        .badge.green { background: #dcfce7; color: #166534; }
+        .badge.yellow { background: #fef3c7; color: #92400e; }
+        .badge.red { background: #fee2e2; color: #991b1b; }
+        .badge.gray { background: #f3f4f6; color: #6b7280; }
 
         .issue-item {
             background: white;
@@ -412,6 +417,78 @@ class HTMLReportGenerator:
             border-radius: 4px;
             margin-left: 8px;
             vertical-align: middle;
+        }
+
+        /* Metrics Table */
+        .metrics-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.95em;
+        }
+        .metrics-table th {
+            background: #f9fafb;
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #e5e7eb;
+            color: #374151;
+        }
+        .metrics-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .metrics-table tr:last-child td { border-bottom: none; }
+        .metrics-table .group-header td {
+            background: #f0f4ff;
+            font-weight: 600;
+            color: #1e40af;
+            padding: 8px 14px;
+            border-bottom: 1px solid #dbeafe;
+        }
+        .metric-value {
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        .metric-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .metric-dot.green { background: #22c55e; }
+        .metric-dot.yellow { background: #eab308; }
+        .metric-dot.red { background: #ef4444; }
+        .metric-dot.gray { background: #9ca3af; }
+        .metric-ref {
+            font-size: 0.8em;
+            color: #9ca3af;
+            margin-left: 6px;
+        }
+
+        /* Weights Table */
+        .weights-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+            margin-top: 16px;
+        }
+        .weights-table th, .weights-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f3f4f6;
+            text-align: left;
+        }
+        .weights-table th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #6b7280;
+        }
+        .weights-table .formula {
+            font-family: monospace;
+            font-size: 0.85em;
+            color: #6b7280;
         }
 
         /* Footer */
@@ -583,6 +660,44 @@ class HTMLReportGenerator:
             </div>
             """
 
+        # Weights transparency table
+        weights = score.get("weights", {})
+        weight_labels = {
+            "visual": "Визуальный анализ (A)",
+            "behavioral": "Поведенческий анализ (B)",
+            "accessibility": "Доступность (C)",
+            "sentiment": "Эмоции (D)"
+        }
+        weights_rows = ""
+        for wk, wv in weights.items():
+            component_score = breakdown.get(wk, 0)
+            weighted = component_score * wv
+            weights_rows += f"""
+            <tr>
+                <td>{weight_labels.get(wk, wk)}</td>
+                <td class="formula">{int(component_score * 100)}%</td>
+                <td class="formula">&times; {wv}</td>
+                <td class="formula">= {weighted:.2f}</td>
+            </tr>
+            """
+        weights_html = ""
+        if weights_rows:
+            total_w = sum(weights.values())
+            weights_html = f"""
+            <div style="margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
+                <h4 style="color: #6b7280; font-size: 0.9em; margin-bottom: 8px;">Формула итоговой оценки</h4>
+                <table class="weights-table">
+                    <thead><tr><th>Компонент</th><th>Балл</th><th>Вес</th><th>Вклад</th></tr></thead>
+                    <tbody>
+                        {weights_rows}
+                        <tr style="border-top: 2px solid #e5e7eb; font-weight: 600;">
+                            <td>Итого</td><td></td><td>{total_w:.2f}</td><td>= {int(overall * 100)}%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            """
+
         return f"""
         <div class="card score-card">
             <div class="score-circle" style="background-color: {color};">
@@ -593,6 +708,128 @@ class HTMLReportGenerator:
             <div class="score-breakdown">
                 {breakdown_html}
             </div>
+            {weights_html}
+        </div>
+        """
+
+    def _render_task_metrics(self) -> str:
+        """Render formal metrics table (M1-M13) with color-coded thresholds"""
+        bm = self.data.get("behavioral_metrics", {})
+        if not bm:
+            return ""
+
+        # Flatten all metrics into one dict
+        all_metrics = {}
+        for group_key in ("task_effectiveness", "interface_quality", "subjective_experience"):
+            all_metrics.update(bm.get(group_key, {}))
+
+        ref = bm.get("reference", {})
+
+        def format_value(key: str, value) -> str:
+            cfg = METRICS_DISPLAY.get(key, {})
+            fmt = cfg.get("format", "")
+            if value is None:
+                return '<span style="color:#9ca3af;">N/A</span>'
+            if fmt == "bool":
+                return "Да" if value else "Нет"
+            if fmt == "percent":
+                return f"{int(value * 100)}%"
+            if fmt == "signed_float":
+                return f"{value:+.2f}"
+            if fmt == "float":
+                return f"{value:.2f}"
+            if fmt == "score100":
+                return f"{value:.0f}/100"
+            if fmt == "trend":
+                labels = {"improving": "Улучшение", "stable": "Стабильно", "declining": "Ухудшение"}
+                return labels.get(value, str(value))
+            if fmt == "int":
+                return str(int(value))
+            return str(value)
+
+        def get_color(key: str, value) -> str:
+            cfg = METRICS_DISPLAY.get(key, {})
+            thresholds = cfg.get("thresholds")
+            if value is None or thresholds is None:
+                # Special cases
+                if cfg.get("format") == "bool":
+                    return "green" if value else "red"
+                if cfg.get("format") == "trend":
+                    return {"improving": "green", "stable": "yellow", "declining": "red"}.get(value, "gray")
+                return "gray"
+            lower_better = cfg.get("lower_is_better", False)
+            g = thresholds["green"]
+            y = thresholds["yellow"]
+            if lower_better:
+                if value <= g:
+                    return "green"
+                elif value <= y:
+                    return "yellow"
+                else:
+                    return "red"
+            else:
+                if value >= g:
+                    return "green"
+                elif value >= y:
+                    return "yellow"
+                else:
+                    return "red"
+
+        rows_html = ""
+        current_group = None
+
+        for key in METRICS_DISPLAY:
+            cfg = METRICS_DISPLAY[key]
+            group = cfg["group"]
+
+            # Group header
+            if group != current_group:
+                current_group = group
+                group_name = METRICS_GROUP_NAMES.get(group, group)
+                rows_html += f'''
+                <tr class="group-header"><td colspan="3">{group_name}</td></tr>
+                '''
+
+            value = all_metrics.get(key)
+            color = get_color(key, value)
+            formatted = format_value(key, value)
+            name = cfg["name_ru"]
+
+            # Reference info for some metrics
+            ref_html = ""
+            if key == "M3_relative_efficiency" and ref.get("optimal_steps"):
+                ref_html = f'<span class="metric-ref">норма: {ref["optimal_steps"]} шагов</span>'
+            elif key == "M6_lostness" and ref.get("min_pages_required"):
+                ref_html = f'<span class="metric-ref">мин. страниц: {ref["min_pages_required"]}</span>'
+            elif key == "M2_steps_to_goal" and ref.get("optimal_steps"):
+                ref_html = f'<span class="metric-ref">оптимум: {ref["optimal_steps"]}</span>'
+
+            rows_html += f'''
+            <tr>
+                <td>{name}</td>
+                <td><span class="metric-dot {color}"></span><span class="metric-value">{formatted}</span>{ref_html}</td>
+                <td style="text-align:center;"><span class="badge {color}" style="font-size:0.75em; padding:2px 8px; border-radius:4px;">{key.split("_")[0]}</span></td>
+            </tr>
+            '''
+
+        return f"""
+        <div class="card">
+            <h2>Метрики задачи</h2>
+            <p style="color: #6b7280; margin-bottom: 16px;">
+                Формальные UX-метрики, рассчитанные по результатам всех модулей анализа.
+            </p>
+            <table class="metrics-table">
+                <thead>
+                    <tr>
+                        <th style="width:45%;">Метрика</th>
+                        <th style="width:40%;">Значение</th>
+                        <th style="width:15%; text-align:center;">Код</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
         </div>
         """
 
@@ -612,21 +849,32 @@ class HTMLReportGenerator:
                     title = c.get("title", "Критическая проблема")
                     detail = c.get("detail", "Требует немедленного внимания")
                     source = c.get("source", "")
+                    recommendation = c.get("recommendation", "")
                     source_tag = f'<span class="source-tag">{source}</span>' if source else ""
                 else:
                     title = c
                     detail = "Требует немедленного внимания."
                     source_tag = ""
+                    recommendation = ""
+
+                rec_html = ""
+                if recommendation:
+                    rec_html = f'''
+                    <div style="margin-top: 8px; padding: 8px 12px; background: rgba(255,255,255,0.7); border-radius: 6px; font-size: 0.9em; border-left: 3px solid #16a34a;">
+                        <strong style="color: #166534;">Рекомендация:</strong> {recommendation}
+                    </div>
+                    '''
 
                 critical_items += f"""
                 <div class="critical-item">
                     <div class="title">{title}{source_tag}</div>
                     <div class="detail">{detail}</div>
+                    {rec_html}
                 </div>
                 """
             critical_html = f"""
             <div class="critical-section">
-                <h3>Критические находки ({len(critical)})</h3>
+                <h3>Ключевые находки ({len(critical)})</h3>
                 {critical_items}
             </div>
             """

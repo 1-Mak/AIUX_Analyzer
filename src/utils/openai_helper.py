@@ -94,8 +94,9 @@ class OpenAIHelper:
             "max_completion_tokens": max_tokens,
         }
 
-        # Only add temperature for models that support it (not gpt-5-mini)
-        if "gpt-5-mini" not in self.model.lower():
+        # Models in the gpt-5 mini/nano family don't support custom temperature
+        no_temp_models = ("gpt-5-mini", "gpt-5.4-mini", "gpt-5.4-nano")
+        if not any(m in self.model.lower() for m in no_temp_models):
             api_params["temperature"] = temperature
 
         response = self.client.chat.completions.create(**api_params)
@@ -187,6 +188,38 @@ Respond in JSON format:
             "model": self.model,
             "image_path": str(image_path)
         }
+
+    def complete_text(
+        self,
+        prompt: str,
+        max_tokens: int = 1000,
+        temperature: float = 0.4
+    ) -> str:
+        """
+        Text-only completion (no image).
+
+        Args:
+            prompt: Text prompt
+            max_tokens: Max response tokens
+            temperature: Sampling temperature
+
+        Returns:
+            Response text
+        """
+        api_params = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_completion_tokens": max_tokens,
+        }
+        no_temp_models = ("gpt-5-mini", "gpt-5.4-mini", "gpt-5.4-nano")
+        if not any(m in self.model.lower() for m in no_temp_models):
+            api_params["temperature"] = temperature
+
+        response = self.client.chat.completions.create(**api_params)
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from OpenAI API")
+        return content
 
     def analyze_with_persona(
         self,

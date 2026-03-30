@@ -52,7 +52,7 @@ class PlaywrightHelper:
         if self.playwright:
             await self.playwright.stop()
 
-    async def navigate(self, url: str, wait_until: str = "networkidle") -> bool:
+    async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> bool:
         """
         Navigate to a URL
 
@@ -262,13 +262,33 @@ class PlaywrightHelper:
             True if click successful
         """
         try:
-            # Try as CSS selector first
-            if await self.page.query_selector(selector):
-                await self.page.click(selector)
+            # Try as CSS selector (only if it looks like one — contains #, ., [, or space)
+            if any(c in selector for c in ('#', '.', '[', ' ', '>')):
+                el = await self.page.query_selector(selector)
+                if el:
+                    await el.click()
+                    return True
+
+            # Try as numeric data-audit-id
+            element = await self.page.query_selector(f'[data-audit-id="{selector}"]')
+            if element:
+                await element.click()
                 return True
 
-            # Try as data-audit-id
-            element = await self.page.query_selector(f'[data-audit-id="{selector}"]')
+            # Try as element id
+            element = await self.page.query_selector(f'[id="{selector}"]')
+            if element:
+                await element.click()
+                return True
+
+            # Fallback: find by visible text (for text labels from screenshot)
+            element = await self.page.query_selector(f'text="{selector}"')
+            if element:
+                await element.click()
+                return True
+
+            # Partial text match
+            element = await self.page.query_selector(f'text={selector}')
             if element:
                 await element.click()
                 return True

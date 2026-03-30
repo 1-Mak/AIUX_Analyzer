@@ -103,12 +103,16 @@ class ActionExecutor:
         selectors.append(f'[id="{target_str}"]')
 
         # Strategy 3: raw CSS selector — only if it doesn't start with a digit
-        # (#33 is invalid CSS; [id="33"] is used instead)
         if any(c in target_str for c in ['.', '[', '>']):
             selectors.append(target_str)
         elif target_str.startswith('#'):
             id_val = target_str[1:]
             selectors.append(f'[id="{id_val}"]')
+
+        # Strategy 4: text-based fallback (for visual labels from screenshot)
+        if not target_str.startswith('[') and not target_str.lstrip('-').isdigit():
+            selectors.append(f'text="{target_str}"')
+            selectors.append(f'text={target_str}')
 
         for selector in selectors:
             success = await self.helper.click_element(selector)
@@ -135,11 +139,12 @@ class ActionExecutor:
 
         target_str = str(target).strip()
 
-        # Avoid #digit selectors (invalid CSS) — use attribute form instead
         selectors_to_try = [
             f'[data-audit-id="{target_str}"]',
             f'[id="{target_str}"]',
-            target_str if any(c in target_str for c in ['.', '[', '>']) else None
+            target_str if any(c in target_str for c in ['.', '[', '>']) else None,
+            f'text="{target_str}"' if not target_str.lstrip('-').isdigit() else None,
+            f'text={target_str}' if not target_str.lstrip('-').isdigit() else None,
         ]
         selectors_to_try = [s for s in selectors_to_try if s]
 
@@ -147,9 +152,8 @@ class ActionExecutor:
             try:
                 element = await self.helper.page.query_selector(selector)
                 if element:
-                    # Clear existing content and type new value
                     await element.fill("")
-                    await element.type(value, delay=50)  # Human-like typing delay
+                    await element.type(value, delay=50)
                     logger.info(f"Type success: '{value}' into {selector}")
                     await asyncio.sleep(0.3)
                     return {"status": "success", "selector_used": selector, "typed_value": value}
@@ -185,7 +189,9 @@ class ActionExecutor:
         selectors_to_try = [
             f'[data-audit-id="{target_str}"]',
             f'[id="{target_str}"]',
-            target_str if any(c in target_str for c in ['.', '[', '>']) else None
+            target_str if any(c in target_str for c in ['.', '[', '>']) else None,
+            f'text="{target_str}"' if not target_str.lstrip('-').isdigit() else None,
+            f'text={target_str}' if not target_str.lstrip('-').isdigit() else None,
         ]
         selectors_to_try = [s for s in selectors_to_try if s]
 
@@ -195,7 +201,7 @@ class ActionExecutor:
                 if element:
                     await element.hover()
                     logger.info(f"Hover success on {selector}")
-                    await asyncio.sleep(0.5)  # Wait for menu to appear
+                    await asyncio.sleep(0.5)
                     return {"status": "success", "selector_used": selector}
             except Exception as e:
                 logger.debug(f"Hover attempt failed for {selector}: {e}")

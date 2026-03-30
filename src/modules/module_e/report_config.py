@@ -147,6 +147,104 @@ def translate_axe_rule(rule_id: str, fallback: str = "") -> str:
     return AXE_RULES_RU.get(rule_id, fallback)
 
 
+# Behavioral metrics display configuration (M1-M13)
+# Each metric: name_ru, format, thresholds (green/yellow/red)
+METRICS_DISPLAY = {
+    "M1_task_completed": {
+        "name_ru": "Задача выполнена",
+        "group": "task_effectiveness",
+        "format": "bool",
+    },
+    "M2_steps_to_goal": {
+        "name_ru": "Шагов до цели",
+        "group": "task_effectiveness",
+        "format": "int",
+        "thresholds": {"green": 7, "yellow": 12},  # <=green good, <=yellow fair, else bad
+        "lower_is_better": True,
+    },
+    "M3_relative_efficiency": {
+        "name_ru": "Относительная эффективность",
+        "group": "task_effectiveness",
+        "format": "percent",
+        "thresholds": {"green": 0.7, "yellow": 0.4},
+        "lower_is_better": False,
+    },
+    "M4_error_count": {
+        "name_ru": "Ошибки (неудачные действия)",
+        "group": "task_effectiveness",
+        "format": "int",
+        "thresholds": {"green": 0, "yellow": 2},
+        "lower_is_better": True,
+    },
+    "M5_backtrack_count": {
+        "name_ru": "Возвраты назад",
+        "group": "task_effectiveness",
+        "format": "int",
+        "thresholds": {"green": 1, "yellow": 3},
+        "lower_is_better": True,
+    },
+    "M6_lostness": {
+        "name_ru": "Потерянность (Lostness)",
+        "group": "interface_quality",
+        "format": "float",
+        "thresholds": {"green": 0.4, "yellow": 0.7},
+        "lower_is_better": True,
+    },
+    "M7_visual_issues": {
+        "name_ru": "Визуальные проблемы",
+        "group": "interface_quality",
+        "format": "int",
+        "thresholds": {"green": 3, "yellow": 7},
+        "lower_is_better": True,
+    },
+    "M8_accessibility_issues": {
+        "name_ru": "Проблемы доступности",
+        "group": "interface_quality",
+        "format": "int",
+        "thresholds": {"green": 3, "yellow": 8},
+        "lower_is_better": True,
+    },
+    "M9_critical_issues": {
+        "name_ru": "Критические проблемы",
+        "group": "interface_quality",
+        "format": "int",
+        "thresholds": {"green": 0, "yellow": 1},
+        "lower_is_better": True,
+    },
+    "M10_session_score": {
+        "name_ru": "Оценка сессии",
+        "group": "subjective_experience",
+        "format": "signed_float",
+        "thresholds": {"green": 0.1, "yellow": -0.2},
+        "lower_is_better": False,
+    },
+    "M11_trend": {
+        "name_ru": "Эмоциональный тренд",
+        "group": "subjective_experience",
+        "format": "trend",
+    },
+    "M12_pain_points": {
+        "name_ru": "Болевые точки",
+        "group": "subjective_experience",
+        "format": "int",
+        "thresholds": {"green": 0, "yellow": 2},
+        "lower_is_better": True,
+    },
+    "M13_sus_proxy": {
+        "name_ru": "SUS-прокси",
+        "group": "subjective_experience",
+        "format": "score100",
+        "thresholds": {"green": 68, "yellow": 50},
+        "lower_is_better": False,
+    },
+}
+
+METRICS_GROUP_NAMES = {
+    "task_effectiveness": "Эффективность задачи",
+    "interface_quality": "Качество интерфейса",
+    "subjective_experience": "Субъективный опыт",
+}
+
 # HTML template settings
 HTML_SETTINGS = {
     "theme": "light",

@@ -68,6 +68,27 @@ class SentimentAnalyzer:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        # UX observation — emotionally rich, high signal
+        if step.get("ux_observation"):
+            texts.append(f"UX-проблема: {step['ux_observation']}")
+
+        # Failed action = explicit negative signal
+        if step.get("status") == "failure":
+            texts.append("Действие не удалось выполнить.")
+
+        # Backtrack = frustration signal
+        if step.get("is_backtrack"):
+            texts.append("Пришлось вернуться на предыдущую страницу — путь оказался неверным.")
+
+        # Successful navigation to new page = positive signal
+        if step.get("status") == "success" and not step.get("is_backtrack"):
+            try:
+                action_data = json.loads(action_taken) if isinstance(action_taken, str) else action_taken
+                if isinstance(action_data, dict) and action_data.get("action_type") in ("navigate", "click"):
+                    texts.append("Успешно перешёл на новую страницу.")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         return " ".join(texts) if texts else ""
 
     def detect_emotion_keywords(self, text: str) -> Dict[str, List[str]]:

@@ -81,11 +81,12 @@ class StateTracker:
 
     def is_stuck(self) -> bool:
         """
-        Detect if agent is stuck
+        Detect if agent is stuck.
 
-        Conditions for being stuck:
-        1. Same action repeated 3+ times in a row
-        2. URL unchanged for 4+ steps with meaningful actions (not just scrolling)
+        Conditions:
+        1. Same (action_type + target) pair repeated 3+ times in a row
+        2. URL unchanged for 6+ steps with 3+ meaningful (non-scroll) actions
+        3. Same URL visited 3+ times total across the session (looping)
 
         Returns:
             True if stuck condition detected
@@ -93,28 +94,38 @@ class StateTracker:
         if len(self.history) < 3:
             return False
 
-        # Check 1: Same action repeated 3+ times
-        last_3_actions = self.action_history[-3:]
-        if len(set(last_3_actions)) == 1:
-            # All 3 actions are the same
-            action = last_3_actions[0]
-            # Scrolling repeatedly is acceptable behavior
-            if action not in ["scroll_down", "scroll_up", "wait"]:
-                logger.warning(f"Stuck detected: same action '{action}' repeated 3 times")
+        # Check 1: Same action+target pair repeated 3+ times in a row
+        def action_key(step: BehaviorStep) -> str:
+            try:
+                data = json.loads(step.action_taken)
+                return f"{data.get('action_type', '')}:{data.get('target', '')}"
+            except Exception:
+                return step.action_taken or ""
+
+        last_3_keys = [action_key(s) for s in self.history[-3:]]
+        if len(set(last_3_keys)) == 1:
+            action_type = self.action_history[-1]
+            if action_type not in ["scroll_down", "scroll_up", "wait"]:
+                logger.warning(f"Stuck detected: same action+target '{last_3_keys[0]}' repeated 3 times")
                 return True
 
-        # Check 2: URL unchanged for 4+ steps with non-scroll actions
-        if len(self.history) >= 4:
-            last_4_urls = self.url_history[-4:]
-            if len(set(last_4_urls)) == 1:
-                # URL hasn't changed in 4 steps
-                last_4_actions = self.action_history[-4:]
-                non_scroll_actions = [a for a in last_4_actions if a not in ["scroll_down", "scroll_up", "wait"]]
-
-                # If there were meaningful actions but URL didn't change
-                if len(non_scroll_actions) >= 2:
-                    logger.warning(f"Stuck detected: URL unchanged for 4 steps with actions: {last_4_actions}")
+        # Check 2: URL unchanged for 6+ steps with 3+ meaningful actions
+        if len(self.history) >= 6:
+            last_6_urls = self.url_history[-6:]
+            if len(set(last_6_urls)) == 1:
+                last_6_actions = self.action_history[-6:]
+                non_scroll = [a for a in last_6_actions if a not in ["scroll_down", "scroll_up", "wait"]]
+                if len(non_scroll) >= 3:
+                    logger.warning(f"Stuck detected: URL unchanged for 6 steps, actions: {last_6_actions}")
                     return True
+
+        # Check 3: Same URL visited 3+ times total (looping between pages)
+        if self.url_history:
+            current_url = self.url_history[-1]
+            visit_count = self.url_history.count(current_url)
+            if visit_count >= 3:
+                logger.warning(f"Stuck detected: URL '{current_url}' visited {visit_count} times")
+                return True
 
         return False
 
