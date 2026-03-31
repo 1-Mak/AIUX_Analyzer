@@ -89,7 +89,7 @@ class ModuleE:
         if not self.report_data:
             self.generate_report()
 
-        html_generator = HTMLReportGenerator(self.report_data)
+        html_generator = HTMLReportGenerator(self.report_data, session_dir=self.session_dir)
         pdf_path = self.session_dir / output_filename
         html_path = self.session_dir / output_filename.replace(".pdf", ".html")
 
@@ -111,7 +111,7 @@ class ModuleE:
         if not self.report_data:
             self.generate_report()
 
-        html_generator = HTMLReportGenerator(self.report_data)
+        html_generator = HTMLReportGenerator(self.report_data, session_dir=self.session_dir)
         output_path = self.session_dir / output_filename
         html_generator.save_html(output_path)
 

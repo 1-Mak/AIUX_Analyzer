@@ -2,7 +2,8 @@
 Module E - HTML Report Template
 Generates detailed HTML reports from report data
 """
-from typing import Dict, Any, List
+import base64
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
 
@@ -12,8 +13,9 @@ from .report_config import RATING_THRESHOLDS, ISSUE_ICONS, METRICS_DISPLAY, METR
 class HTMLReportGenerator:
     """Generates comprehensive HTML reports from report data"""
 
-    def __init__(self, report_data: Dict[str, Any]):
+    def __init__(self, report_data: Dict[str, Any], session_dir: Optional[Path] = None):
         self.data = report_data
+        self.session_dir = Path(session_dir) if session_dir else None
 
     def generate_html(self) -> str:
         return f"""<!DOCTYPE html>
@@ -33,6 +35,7 @@ class HTMLReportGenerator:
         {self._render_task_metrics()}
         {self._render_executive_summary()}
         {self._render_behavioral_timeline()}
+        {self._render_navigation_map()}
         {self._render_detailed_findings()}
         {self._render_module_details()}
         {self._render_all_issues_detailed()}
@@ -86,41 +89,82 @@ class HTMLReportGenerator:
         }
 
         /* Score Section */
-        .score-card { text-align: center; padding: 36px; }
-        .score-circle {
-            width: 160px;
-            height: 160px;
-            border-radius: 50%;
-            display: inline-flex;
+        .score-card { padding: 36px; }
+        .score-top {
+            display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 3.2em;
-            font-weight: bold;
-            color: white;
-            margin-bottom: 16px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-        }
-        .score-label { font-size: 1.6em; font-weight: 600; margin-bottom: 8px; }
-        .score-description { color: #6b7280; max-width: 600px; margin: 0 auto 24px; }
-        .score-breakdown {
-            display: flex;
-            justify-content: center;
-            gap: 40px;
-            margin-top: 24px;
+            gap: 48px;
             flex-wrap: wrap;
         }
-        .score-item { text-align: center; }
-        .score-item .value { font-size: 1.8em; font-weight: 700; }
-        .score-item .label { color: #6b7280; font-size: 0.9em; margin-top: 4px; }
-        .score-item .bar {
-            width: 80px;
-            height: 6px;
-            background: #e5e7eb;
-            border-radius: 3px;
-            margin-top: 8px;
-            overflow: hidden;
+        .score-donut-wrap { text-align: center; }
+        .score-radar-wrap { text-align: center; }
+        .score-label { font-size: 1.6em; font-weight: 600; margin: 8px 0 4px; }
+        .score-description { color: #6b7280; max-width: 320px; margin: 0 auto; font-size: 0.9em; }
+
+        /* Emotion Bar */
+        .emotion-bar-wrap {
+            margin: 16px 0 8px;
+            padding: 12px 0;
         }
-        .score-item .bar-fill { height: 100%; border-radius: 3px; }
+        .emotion-bar-label {
+            font-size: 0.8em;
+            color: #9ca3af;
+            margin-bottom: 6px;
+        }
+        .emotion-bar {
+            display: flex;
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            background: #e5e7eb;
+        }
+        .emotion-bar .seg {
+            height: 100%;
+            transition: width 0.3s;
+        }
+
+        /* Screenshot thumbnails in timeline */
+        .timeline-screenshot {
+            width: 120px;
+            height: 68px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: transform 0.2s;
+        }
+        .timeline-screenshot:hover {
+            transform: scale(2.5);
+            z-index: 100;
+            position: relative;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+
+        /* Navigation Map */
+        .nav-map { margin: 16px 0; overflow-x: auto; }
+        .nav-map svg text { font-family: system-ui, sans-serif; }
+
+        /* Metric progress bar */
+        .metric-bar-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .metric-bar {
+            flex: 1;
+            height: 7px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            max-width: 120px;
+        }
+        .metric-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
 
         /* Typography */
         h2 {
@@ -394,6 +438,7 @@ class HTMLReportGenerator:
         }
         .timeline-step.backtrack { background: #fef3c7; color: #92400e; }
         .timeline-step.negative { background: #fee2e2; color: #991b1b; }
+        .timeline-step.positive { background: #dcfce7; color: #166534; }
         .timeline-content { flex: 1; }
         .timeline-action { font-weight: 500; font-size: 0.95em; }
         .timeline-detail { color: #6b7280; font-size: 0.85em; margin-top: 4px; }
@@ -575,6 +620,103 @@ class HTMLReportGenerator:
         </div>
         """
 
+    def _render_svg_donut(self, overall: float, breakdown: dict, color: str) -> str:
+        """Generate SVG donut chart with segments for each module score"""
+        import math
+        pct = int(overall * 100)
+        # Donut parameters
+        cx, cy, r = 90, 90, 70
+        stroke_w = 18
+        circumference = 2 * math.pi * r
+
+        # Background ring
+        svg = f'''<svg width="180" height="180" viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#e5e7eb" stroke-width="{stroke_w}"/>'''
+
+        # Colored arc — overall score
+        dash = circumference * overall
+        gap = circumference - dash
+        svg += f'''
+            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
+                stroke="{color}" stroke-width="{stroke_w}"
+                stroke-dasharray="{dash:.1f} {gap:.1f}"
+                stroke-linecap="round"
+                transform="rotate(-90 {cx} {cy})"
+                style="transition: stroke-dasharray 0.6s ease;"/>'''
+
+        # Center text
+        svg += f'''
+            <text x="{cx}" y="{cy - 8}" text-anchor="middle" font-size="36" font-weight="700" fill="{color}">{pct}</text>
+            <text x="{cx}" y="{cy + 14}" text-anchor="middle" font-size="13" fill="#6b7280">из 100</text>
+        </svg>'''
+        return svg
+
+    def _render_radar_chart(self, breakdown: dict) -> str:
+        """Generate SVG radar/spider chart for 4 component scores"""
+        import math
+        labels_cfg = {
+            "visual": ("Визуал", "#8b5cf6"),
+            "behavioral": ("Поведение", "#3b82f6"),
+            "accessibility": ("Доступность", "#10b981"),
+            "sentiment": ("Эмоции", "#f59e0b")
+        }
+        keys = ["visual", "behavioral", "accessibility", "sentiment"]
+        values = [breakdown.get(k, 0) for k in keys]
+        n = len(keys)
+        cx, cy, max_r = 120, 120, 85
+
+        svg = f'<svg width="240" height="260" viewBox="0 0 240 260" xmlns="http://www.w3.org/2000/svg">'
+
+        # Grid rings
+        for level in (0.25, 0.5, 0.75, 1.0):
+            r = max_r * level
+            points = []
+            for i in range(n):
+                angle = (2 * math.pi * i / n) - math.pi / 2
+                points.append(f"{cx + r * math.cos(angle):.1f},{cy + r * math.sin(angle):.1f}")
+            svg += f'<polygon points="{" ".join(points)}" fill="none" stroke="#e5e7eb" stroke-width="1"/>'
+
+        # Axis lines
+        for i in range(n):
+            angle = (2 * math.pi * i / n) - math.pi / 2
+            x2 = cx + max_r * math.cos(angle)
+            y2 = cy + max_r * math.sin(angle)
+            svg += f'<line x1="{cx}" y1="{cy}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#e5e7eb" stroke-width="1"/>'
+
+        # Data polygon
+        data_points = []
+        for i in range(n):
+            angle = (2 * math.pi * i / n) - math.pi / 2
+            r = max_r * values[i]
+            data_points.append(f"{cx + r * math.cos(angle):.1f},{cy + r * math.sin(angle):.1f}")
+        svg += f'<polygon points="{" ".join(data_points)}" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="2.5"/>'
+
+        # Data dots + labels
+        for i in range(n):
+            angle = (2 * math.pi * i / n) - math.pi / 2
+            r = max_r * values[i]
+            dx = cx + r * math.cos(angle)
+            dy = cy + r * math.sin(angle)
+            _, dot_color = labels_cfg.get(keys[i], ("", "#6b7280"))
+            svg += f'<circle cx="{dx:.1f}" cy="{dy:.1f}" r="4" fill="{dot_color}" stroke="white" stroke-width="2"/>'
+
+            # Label position (outside the chart)
+            lr = max_r + 22
+            lx = cx + lr * math.cos(angle)
+            ly = cy + lr * math.sin(angle)
+            label_name, label_color = labels_cfg.get(keys[i], (keys[i], "#6b7280"))
+            anchor = "middle"
+            if lx < cx - 10:
+                anchor = "end"
+            elif lx > cx + 10:
+                anchor = "start"
+            pct_val = int(values[i] * 100)
+            svg += f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" font-size="11" fill="{label_color}" font-weight="600">{label_name}</text>'
+            svg += f'<text x="{lx:.1f}" y="{ly + 14:.1f}" text-anchor="{anchor}" font-size="11" fill="#9ca3af">{pct_val}%</text>'
+
+        svg += '</svg>'
+        return svg
+
     def _render_overall_score(self) -> str:
         score = self.data.get("overall_score", {})
         overall = score.get("overall", 0)
@@ -591,74 +733,11 @@ class HTMLReportGenerator:
         }
         desc = descriptions.get(score.get("rating", "fair"), "")
 
-        breakdown_html = ""
-        labels = {
-            "visual": ("Визуал", "#8b5cf6"),
-            "behavioral": ("Поведение", "#3b82f6"),
-            "accessibility": ("Доступность", "#10b981"),
-            "sentiment": ("Эмоции", "#f59e0b")
-        }
-        for key, val in breakdown.items():
-            label_name, bar_color = labels.get(key, (key, "#6b7280"))
-            pct = int(val * 100)
-            breakdown_html += f"""
-            <div class="score-item">
-                <div class="value" style="color: {bar_color};">{pct}%</div>
-                <div class="label">{label_name}</div>
-                <div class="bar">
-                    <div class="bar-fill" style="width: {pct}%; background: {bar_color};"></div>
-                </div>
-            </div>
-            """
+        # SVG donut chart
+        donut_svg = self._render_svg_donut(overall, breakdown, color)
 
-        # Navigation metrics from scenario (reference, not part of weighted score)
-        nav = score.get("navigation_metrics", {})
-        nav_eff = nav.get("navigation_efficiency")
-        pages_cov = nav.get("pages_coverage")
-        optimal = nav.get("optimal_steps")
-        actual = nav.get("actual_steps", 0)
-        min_pages = nav.get("min_pages_required")
-        unique_pages = nav.get("unique_pages", 0)
-        pages_ok = nav.get("pages_ok")
-
-        nav_html = ""
-        if nav_eff is not None:
-            eff_pct = int(nav_eff * 100)
-            eff_color = "#22c55e" if nav_eff >= 0.7 else "#eab308" if nav_eff >= 0.4 else "#ef4444"
-            nav_html += f"""
-            <div class="score-item" title="Оптимальный путь: {optimal} шагов. Фактически: {actual}">
-                <div class="value" style="color: {eff_color};">{eff_pct}%</div>
-                <div class="label">Эффективность</div>
-                <div class="bar">
-                    <div class="bar-fill" style="width: {eff_pct}%; background: {eff_color};"></div>
-                </div>
-                <div style="font-size:0.75em; color:#9ca3af; margin-top:2px;">{actual}/{optimal} шагов</div>
-            </div>
-            """
-        if pages_cov is not None:
-            cov_pct = int(pages_cov * 100)
-            cov_color = "#22c55e" if pages_ok else "#ef4444"
-            nav_html += f"""
-            <div class="score-item" title="Минимум страниц: {min_pages}. Посещено уникальных: {unique_pages}">
-                <div class="value" style="color: {cov_color};">{unique_pages}/{min_pages}</div>
-                <div class="label">Охват страниц</div>
-                <div class="bar">
-                    <div class="bar-fill" style="width: {min(cov_pct,100)}%; background: {cov_color};"></div>
-                </div>
-                <div style="font-size:0.75em; color:#9ca3af; margin-top:2px;">{"выполнено" if pages_ok else "не выполнено"}</div>
-            </div>
-            """
-
-        if nav_html:
-            breakdown_html += f"""
-            <div style="width:100%; border-top: 1px dashed #e5e7eb; margin: 8px 0 0; padding-top: 12px;
-                        display:flex; justify-content:center; gap:40px; flex-wrap:wrap;">
-                <div style="font-size:0.8em; color:#9ca3af; width:100%; text-align:center; margin-bottom:4px;">
-                    Сценарные метрики (справочно)
-                </div>
-                {nav_html}
-            </div>
-            """
+        # SVG radar chart
+        radar_svg = self._render_radar_chart(breakdown)
 
         # Weights transparency table
         weights = score.get("weights", {})
@@ -672,25 +751,33 @@ class HTMLReportGenerator:
         for wk, wv in weights.items():
             component_score = breakdown.get(wk, 0)
             weighted = component_score * wv
+            bar_pct = int(component_score * 100)
+            bar_color = {"visual": "#8b5cf6", "behavioral": "#3b82f6", "accessibility": "#10b981", "sentiment": "#f59e0b"}.get(wk, "#6b7280")
             weights_rows += f"""
             <tr>
                 <td>{weight_labels.get(wk, wk)}</td>
-                <td class="formula">{int(component_score * 100)}%</td>
-                <td class="formula">&times; {wv}</td>
-                <td class="formula">= {weighted:.2f}</td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div style="flex:1; height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden;">
+                            <div style="width:{bar_pct}%; height:100%; background:{bar_color}; border-radius:3px;"></div>
+                        </div>
+                        <span class="formula">{bar_pct}%</span>
+                    </div>
+                </td>
+                <td class="formula">&times;{wv}</td>
+                <td class="formula" style="font-weight:600;">= {weighted:.2f}</td>
             </tr>
             """
         weights_html = ""
         if weights_rows:
             total_w = sum(weights.values())
             weights_html = f"""
-            <div style="margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
-                <h4 style="color: #6b7280; font-size: 0.9em; margin-bottom: 8px;">Формула итоговой оценки</h4>
+            <div style="margin-top: 20px;">
                 <table class="weights-table">
                     <thead><tr><th>Компонент</th><th>Балл</th><th>Вес</th><th>Вклад</th></tr></thead>
                     <tbody>
                         {weights_rows}
-                        <tr style="border-top: 2px solid #e5e7eb; font-weight: 600;">
+                        <tr style="border-top: 2px solid #d1d5db; font-weight: 600;">
                             <td>Итого</td><td></td><td>{total_w:.2f}</td><td>= {int(overall * 100)}%</td>
                         </tr>
                     </tbody>
@@ -700,13 +787,15 @@ class HTMLReportGenerator:
 
         return f"""
         <div class="card score-card">
-            <div class="score-circle" style="background-color: {color};">
-                {int(overall * 100)}
-            </div>
-            <div class="score-label">{label}</div>
-            <p class="score-description">{desc}</p>
-            <div class="score-breakdown">
-                {breakdown_html}
+            <div class="score-top">
+                <div class="score-donut-wrap">
+                    {donut_svg}
+                    <div class="score-label">{label}</div>
+                    <p class="score-description">{desc}</p>
+                </div>
+                <div class="score-radar-wrap">
+                    {radar_svg}
+                </div>
             </div>
             {weights_html}
         </div>
@@ -804,10 +893,29 @@ class HTMLReportGenerator:
             elif key == "M2_steps_to_goal" and ref.get("optimal_steps"):
                 ref_html = f'<span class="metric-ref">оптимум: {ref["optimal_steps"]}</span>'
 
+            # Progress bar for percentage/ratio metrics
+            bar_html = ""
+            bar_colors = {"green": "#22c55e", "yellow": "#eab308", "red": "#ef4444", "gray": "#9ca3af"}
+            fmt = cfg.get("format", "")
+            if fmt == "percent" and value is not None:
+                bar_pct = int(value * 100)
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
+            elif fmt == "score100" and value is not None:
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{min(int(value), 100)}%; background:{bar_colors[color]};"></div></div>'''
+            elif fmt == "float" and value is not None:
+                # Lostness: 0 = best, 1.5+ = worst → invert
+                bar_pct = max(0, min(100, int((1 - value / 1.5) * 100)))
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
+            elif fmt == "signed_float" and value is not None:
+                bar_pct = int((value + 1) * 50)  # -1..+1 → 0..100
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
+
+            value_cell = f'''<div class="metric-bar-wrap"><span class="metric-dot {color}"></span><span class="metric-value">{formatted}</span>{ref_html}{bar_html}</div>'''
+
             rows_html += f'''
             <tr>
                 <td>{name}</td>
-                <td><span class="metric-dot {color}"></span><span class="metric-value">{formatted}</span>{ref_html}</td>
+                <td>{value_cell}</td>
                 <td style="text-align:center;"><span class="badge {color}" style="font-size:0.75em; padding:2px 8px; border-radius:4px;">{key.split("_")[0]}</span></td>
             </tr>
             '''
@@ -895,6 +1003,49 @@ class HTMLReportGenerator:
         </div>
         """
 
+    def _get_screenshot_base64(self, step_id: int) -> str:
+        """Load step screenshot as base64 data URI for embedding in HTML"""
+        if not self.session_dir:
+            return ""
+        screenshot_path = self.session_dir / f"step_{step_id:02d}_screenshot.png"
+        if not screenshot_path.exists():
+            return ""
+        try:
+            data = screenshot_path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            return f"data:image/png;base64,{b64}"
+        except Exception:
+            return ""
+
+    def _render_emotion_bar(self, timeline: list) -> str:
+        """Render horizontal emotion gradient bar from timeline sentiments"""
+        if not timeline:
+            return ""
+        colors = {"POSITIVE": "#22c55e", "NEUTRAL": "#94a3b8", "NEGATIVE": "#ef4444"}
+        n = len(timeline)
+        segments = ""
+        for step in timeline:
+            sentiment = step.get("sentiment", "NEUTRAL")
+            c = colors.get(sentiment, "#94a3b8")
+            w = 100 / n
+            segments += f'<div class="seg" style="width:{w:.2f}%; background:{c};" title="Шаг {step.get("step_id", "")} — {sentiment}"></div>'
+
+        return f"""
+        <div class="emotion-bar-wrap">
+            <div class="emotion-bar-label">Эмоциональный профиль сессии</div>
+            <div class="emotion-bar">{segments}</div>
+            <div style="display:flex; justify-content:space-between; font-size:0.75em; color:#9ca3af; margin-top:4px;">
+                <span>Шаг 1</span>
+                <div style="display:flex; gap:12px;">
+                    <span><span style="color:#22c55e;">&#9679;</span> Позитив</span>
+                    <span><span style="color:#94a3b8;">&#9679;</span> Нейтрал</span>
+                    <span><span style="color:#ef4444;">&#9679;</span> Негатив</span>
+                </div>
+                <span>Шаг {n}</span>
+            </div>
+        </div>
+        """
+
     def _render_behavioral_timeline(self) -> str:
         timeline = self.data.get("behavioral_timeline", [])
         if not timeline:
@@ -909,6 +1060,9 @@ class HTMLReportGenerator:
             "hover": "Наведение",
             "unknown": "Действие",
         }
+
+        # Emotion bar
+        emotion_bar_html = self._render_emotion_bar(timeline)
 
         items_html = ""
         for step in timeline:
@@ -925,7 +1079,7 @@ class HTMLReportGenerator:
             target_text = f" &rarr; {target}" if target else ""
 
             # Step circle style
-            step_class = "backtrack" if is_backtrack else ("negative" if sentiment == "NEGATIVE" else "")
+            step_class = "backtrack" if is_backtrack else ("negative" if sentiment == "NEGATIVE" else ("positive" if sentiment == "POSITIVE" else ""))
             item_class = "backtrack" if is_backtrack else ""
 
             # Backtrack badge
@@ -936,6 +1090,12 @@ class HTMLReportGenerator:
             if ux_observation:
                 ux_html = f'<div class="timeline-ux-obs">UX: {ux_observation}</div>'
 
+            # Screenshot thumbnail
+            screenshot_html = ""
+            screenshot_data = self._get_screenshot_base64(step_id)
+            if screenshot_data:
+                screenshot_html = f'<img class="timeline-screenshot" src="{screenshot_data}" alt="Шаг {step_id}" loading="lazy"/>'
+
             items_html += f"""
             <div class="timeline-item {item_class}">
                 <div class="timeline-step {step_class}">{step_id}</div>
@@ -945,6 +1105,7 @@ class HTMLReportGenerator:
                     {f'<div class="timeline-url">{url}</div>' if url else ''}
                     {ux_html}
                 </div>
+                {screenshot_html}
             </div>
             """
 
@@ -967,9 +1128,147 @@ class HTMLReportGenerator:
             <p style="color: #6b7280; margin-bottom: 8px;">
                 Результат: <strong>{status_text}</strong>
             </p>
+            {emotion_bar_html}
             <div class="timeline">
                 {items_html}
             </div>
+        </div>
+        """
+
+    def _render_navigation_map(self) -> str:
+        """Render SVG navigation path showing URL transitions with loops highlighted"""
+        from urllib.parse import urlparse
+        timeline = self.data.get("behavioral_timeline", [])
+        if not timeline:
+            return ""
+
+        # Extract unique URLs in visit order, track transitions
+        urls_sequence = []
+        for step in timeline:
+            url = step.get("url", "")
+            if url:
+                urls_sequence.append(url)
+
+        if len(urls_sequence) < 2:
+            return ""
+
+        # Shorten URLs to path only
+        def short_url(url: str) -> str:
+            try:
+                parsed = urlparse(url)
+                path = parsed.path.rstrip("/")
+                if not path or path == "":
+                    return parsed.netloc or url[:30]
+                # Keep last 2 path segments
+                parts = path.split("/")
+                short = "/".join(parts[-2:]) if len(parts) > 2 else path
+                return short if len(short) <= 35 else short[:32] + "..."
+            except Exception:
+                return url[:30]
+
+        # Build unique nodes and edges
+        unique_urls = []
+        url_to_idx = {}
+        for u in urls_sequence:
+            if u not in url_to_idx:
+                url_to_idx[u] = len(unique_urls)
+                unique_urls.append(u)
+
+        # Count visits per URL
+        visit_counts = {}
+        for u in urls_sequence:
+            visit_counts[u] = visit_counts.get(u, 0) + 1
+
+        # Build edges with counts
+        edges = {}
+        for i in range(len(urls_sequence) - 1):
+            a, b = urls_sequence[i], urls_sequence[i + 1]
+            if a != b:
+                key = (url_to_idx[a], url_to_idx[b])
+                edges[key] = edges.get(key, 0) + 1
+
+        n = len(unique_urls)
+        if n > 12:
+            return ""  # Too many nodes — skip to avoid clutter
+
+        # Layout: horizontal flow
+        node_w = 140
+        node_h = 36
+        gap_x = 40
+        cols = min(n, 4)
+        rows_count = (n + cols - 1) // cols
+        svg_w = cols * (node_w + gap_x) + 40
+        svg_h = rows_count * 80 + 60
+
+        # Node positions (snake layout)
+        positions = []
+        for i in range(n):
+            row = i // cols
+            col = i % cols
+            if row % 2 == 1:
+                col = cols - 1 - col  # snake: reverse odd rows
+            x = 20 + col * (node_w + gap_x)
+            y = 30 + row * 80
+            positions.append((x, y))
+
+        svg = f'<svg width="100%" viewBox="0 0 {svg_w} {svg_h}" xmlns="http://www.w3.org/2000/svg" style="max-width:{svg_w}px;">'
+
+        # Draw edges
+        for (a_idx, b_idx), count in edges.items():
+            ax, ay = positions[a_idx]
+            bx, by = positions[b_idx]
+            ax_c, ay_c = ax + node_w / 2, ay + node_h / 2
+            bx_c, by_c = bx + node_w / 2, by + node_h / 2
+
+            is_back = b_idx < a_idx  # backtrack
+            stroke_color = "#ef4444" if is_back else "#94a3b8"
+            stroke_w = 2 if count == 1 else 3
+            opacity = "0.5" if count == 1 else "0.8"
+
+            # Curved path for backtracks
+            if is_back:
+                mid_y = min(ay_c, by_c) - 30
+                svg += f'<path d="M{ax_c:.0f},{ay_c:.0f} Q{(ax_c + bx_c) / 2:.0f},{mid_y:.0f} {bx_c:.0f},{by_c:.0f}" fill="none" stroke="{stroke_color}" stroke-width="{stroke_w}" opacity="{opacity}" stroke-dasharray="6,4" marker-end="url(#arrow-back)"/>'
+            else:
+                svg += f'<line x1="{ax_c:.0f}" y1="{ay_c:.0f}" x2="{bx_c:.0f}" y2="{by_c:.0f}" stroke="{stroke_color}" stroke-width="{stroke_w}" opacity="{opacity}" marker-end="url(#arrow)"/>'
+
+        # Arrow markers
+        svg += '''
+        <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+            </marker>
+            <marker id="arrow-back" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444"/>
+            </marker>
+        </defs>'''
+
+        # Draw nodes
+        for i, url in enumerate(unique_urls):
+            x, y = positions[i]
+            visits = visit_counts[url]
+            label = short_url(url)
+            is_loop = visits > 1
+
+            fill = "#fef2f2" if is_loop else "#f0f4ff"
+            border = "#ef4444" if is_loop else "#93c5fd"
+            text_color = "#991b1b" if is_loop else "#1e40af"
+
+            svg += f'<rect x="{x}" y="{y}" width="{node_w}" height="{node_h}" rx="8" fill="{fill}" stroke="{border}" stroke-width="1.5"/>'
+            svg += f'<text x="{x + node_w / 2}" y="{y + node_h / 2 + 1}" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="{text_color}" font-weight="500">{label}</text>'
+            if is_loop:
+                svg += f'<circle cx="{x + node_w - 8}" cy="{y + 8}" r="9" fill="#ef4444"/>'
+                svg += f'<text x="{x + node_w - 8}" y="{y + 8}" text-anchor="middle" dominant-baseline="central" font-size="9" fill="white" font-weight="700">{visits}</text>'
+
+        svg += '</svg>'
+
+        return f"""
+        <div class="card">
+            <h2>Карта навигации</h2>
+            <p style="color: #6b7280; margin-bottom: 12px;">
+                Схема переходов между страницами. Красные стрелки — возвраты, красные кружки — повторные посещения.
+            </p>
+            <div class="nav-map">{svg}</div>
         </div>
         """
 
@@ -1003,6 +1302,16 @@ class HTMLReportGenerator:
         </div>
         """
 
+    def _module_icon(self, module: str) -> str:
+        """Return inline SVG icon for each module"""
+        icons = {
+            "a": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+            "b": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>',
+            "c": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8l-8 8M8 8l8 8"/></svg>',
+            "d": '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+        }
+        return icons.get(module, module.upper())
+
     def _render_module_details(self) -> str:
         summaries = self.data.get("module_summaries", {})
         cards_html = ""
@@ -1015,7 +1324,7 @@ class HTMLReportGenerator:
             cards_html += f"""
             <div class="module-card">
                 <h3>
-                    <span class="icon" style="background: #ede9fe; color: #7c3aed;">A</span>
+                    <span class="icon" style="background: #ede9fe; color: #7c3aed;">{self._module_icon('a')}</span>
                     Визуальный анализ
                 </h3>
                 <div class="stats">
@@ -1104,7 +1413,7 @@ class HTMLReportGenerator:
             cards_html += f"""
             <div class="module-card">
                 <h3>
-                    <span class="icon" style="background: #dbeafe; color: #2563eb;">B</span>
+                    <span class="icon" style="background: #dbeafe; color: #2563eb;">{self._module_icon('b')}</span>
                     Поведенческий анализ
                 </h3>
                 <div class="stats">
@@ -1140,7 +1449,7 @@ class HTMLReportGenerator:
             cards_html += f"""
             <div class="module-card">
                 <h3>
-                    <span class="icon" style="background: #d1fae5; color: #059669;">C</span>
+                    <span class="icon" style="background: #d1fae5; color: #059669;">{self._module_icon('c')}</span>
                     Аудит доступности (WCAG {m.get('wcag_level', 'AA')})
                 </h3>
                 <div class="stats">
@@ -1183,7 +1492,7 @@ class HTMLReportGenerator:
             cards_html += f"""
             <div class="module-card">
                 <h3>
-                    <span class="icon" style="background: #fef3c7; color: #d97706;">D</span>
+                    <span class="icon" style="background: #fef3c7; color: #d97706;">{self._module_icon('d')}</span>
                     Анализ эмоций
                 </h3>
                 <div class="stats">
