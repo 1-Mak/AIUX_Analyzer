@@ -113,7 +113,7 @@ class VisualIssue(BaseModel):
         description="Nielsen heuristic violated"
     )
     location: str = Field(
-        description="Grid location: single cell (e.g., 'C4') or range (e.g., 'B3-C4', 'A1-D2')"
+        description="Verbal zone description (e.g., 'Шапка сайта', 'Главное меню', 'Подвал')"
     )
     description: str = Field(
         description="Detailed description of the issue"
@@ -128,14 +128,10 @@ class VisualIssue(BaseModel):
 
     @validator('location')
     def validate_location(cls, v):
-        """Validate grid location format (e.g., 'C4' or 'B3-C4')"""
-        import re
-        # Pattern: single cell (A1, B2, C3) or range (A1-B2, C3-D4)
-        pattern = r'^[A-Z]\d+(-[A-Z]\d+)?$'
-        if not re.match(pattern, v):
-            raise ValueError(
-                f"Invalid location format: '{v}'. Use single cell (e.g., 'C4') or range (e.g., 'B3-C4')"
-            )
+        """Ensure location is a non-empty verbal zone description"""
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Location must be a non-empty verbal zone description")
         return v
 
 
