@@ -147,37 +147,50 @@ def translate_axe_rule(rule_id: str, fallback: str = "") -> str:
     return AXE_RULES_RU.get(rule_id, fallback)
 
 
-# Behavioral metrics display configuration (M1-M13)
+# Average step time in seconds for proxy task time calculation (M7).
+# Agent doesn't measure real time, so we use a constant per step.
+AVG_STEP_TIME_SEC = 8.0
+
+# Map WCAG impact (axe-core) to unified severity scale used in M8
+WCAG_IMPACT_TO_SEVERITY = {
+    "critical": "critical",
+    "serious": "high",
+    "moderate": "medium",
+    "minor": "low",
+}
+
+# Behavioral metrics display configuration (M1-M12)
 # Each metric: name_ru, format, thresholds (green/yellow/red)
 METRICS_DISPLAY = {
+    # === Group 1: Task Effectiveness (M1-M7) ===
     "M1_task_completed": {
-        "name_ru": "Задача выполнена",
+        "name_ru": "Завершённость задачи",
         "group": "task_effectiveness",
         "format": "bool",
     },
     "M2_steps_to_goal": {
-        "name_ru": "Шагов до цели",
+        "name_ru": "Количество шагов",
         "group": "task_effectiveness",
         "format": "int",
-        "thresholds": {"green": 7, "yellow": 12},  # <=green good, <=yellow fair, else bad
+        "thresholds": {"green": 7, "yellow": 12},
         "lower_is_better": True,
     },
     "M3_relative_efficiency": {
         "name_ru": "Относительная эффективность",
         "group": "task_effectiveness",
-        "format": "percent",
-        "thresholds": {"green": 0.7, "yellow": 0.4},
-        "lower_is_better": False,
+        "format": "ratio",  # actual/optimal, 1.0=ideal, >1=worse
+        "thresholds": {"green": 1.4, "yellow": 2.0},
+        "lower_is_better": True,
     },
     "M4_error_count": {
-        "name_ru": "Ошибки (неудачные действия)",
+        "name_ru": "Количество ошибок",
         "group": "task_effectiveness",
         "format": "int",
         "thresholds": {"green": 0, "yellow": 2},
         "lower_is_better": True,
     },
     "M5_backtrack_count": {
-        "name_ru": "Возвраты назад",
+        "name_ru": "Количество возвратов",
         "group": "task_effectiveness",
         "format": "int",
         "thresholds": {"green": 1, "yellow": 3},
@@ -185,64 +198,55 @@ METRICS_DISPLAY = {
     },
     "M6_lostness": {
         "name_ru": "Потерянность (Lostness)",
-        "group": "interface_quality",
+        "group": "task_effectiveness",
         "format": "float",
         "thresholds": {"green": 0.4, "yellow": 0.7},
         "lower_is_better": True,
     },
-    "M7_visual_issues": {
-        "name_ru": "Визуальные проблемы",
+    "M7_task_time": {
+        "name_ru": "Время выполнения (прокси)",
+        "group": "task_effectiveness",
+        "format": "seconds",
+        "thresholds": {"green": 60, "yellow": 120},
+        "lower_is_better": True,
+    },
+    # === Group 2: Interface Quality (M8-M9) ===
+    "M8_interface_issues": {
+        "name_ru": "Проблемы интерфейса (по серьёзности)",
         "group": "interface_quality",
-        "format": "int",
-        "thresholds": {"green": 3, "yellow": 7},
-        "lower_is_better": True,
+        "format": "issues_breakdown",  # composite display
     },
-    "M8_accessibility_issues": {
-        "name_ru": "Проблемы доступности",
+    "M9_issue_overlap": {
+        "name_ru": "Пересечение с пользователями (precision/recall)",
         "group": "interface_quality",
-        "format": "int",
-        "thresholds": {"green": 3, "yellow": 8},
-        "lower_is_better": True,
+        "format": "overlap_placeholder",
     },
-    "M9_critical_issues": {
-        "name_ru": "Критические проблемы",
-        "group": "interface_quality",
-        "format": "int",
-        "thresholds": {"green": 0, "yellow": 1},
-        "lower_is_better": True,
-    },
-    "M10_session_score": {
-        "name_ru": "Оценка сессии",
-        "group": "subjective_experience",
-        "format": "signed_float",
-        "thresholds": {"green": 0.1, "yellow": -0.2},
-        "lower_is_better": False,
-    },
-    "M11_trend": {
-        "name_ru": "Эмоциональный тренд",
-        "group": "subjective_experience",
-        "format": "trend",
-    },
-    "M12_pain_points": {
-        "name_ru": "Болевые точки",
-        "group": "subjective_experience",
-        "format": "int",
-        "thresholds": {"green": 0, "yellow": 2},
-        "lower_is_better": True,
-    },
-    "M13_sus_proxy": {
+    # === Group 3: Subjective Experience (M10-M12) ===
+    "M10_sus_proxy": {
         "name_ru": "SUS-прокси",
         "group": "subjective_experience",
         "format": "score100",
         "thresholds": {"green": 68, "yellow": 50},
         "lower_is_better": False,
     },
+    "M11_emotional_trend": {
+        "name_ru": "Эмоциональный тренд",
+        "group": "subjective_experience",
+        "format": "trend",
+    },
+    "M12_pain_points_count": {
+        "name_ru": "Болевые точки",
+        "group": "subjective_experience",
+        "format": "int",
+        "thresholds": {"green": 0, "yellow": 2},
+        "lower_is_better": True,
+    },
 }
 
 METRICS_GROUP_NAMES = {
-    "task_effectiveness": "Эффективность задачи",
-    "interface_quality": "Качество интерфейса",
-    "subjective_experience": "Субъективный опыт",
+    "task_effectiveness": "Эффективность (M1–M7)",
+    "interface_quality": "Качество интерфейса (M8–M9)",
+    "subjective_experience": "Субъективный опыт (M10–M12)",
 }
 
 # HTML template settings

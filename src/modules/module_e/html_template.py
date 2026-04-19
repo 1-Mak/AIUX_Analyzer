@@ -802,7 +802,7 @@ class HTMLReportGenerator:
         """
 
     def _render_task_metrics(self) -> str:
-        """Render formal metrics table (M1-M13) with color-coded thresholds"""
+        """Render formal metrics table (M1-M12) with color-coded thresholds"""
         bm = self.data.get("behavioral_metrics", {})
         if not bm:
             return ""
@@ -827,6 +827,14 @@ class HTMLReportGenerator:
                 return f"{value:+.2f}"
             if fmt == "float":
                 return f"{value:.2f}"
+            if fmt == "ratio":
+                return f"×{value:.2f}"
+            if fmt == "seconds":
+                if value >= 60:
+                    mins = int(value // 60)
+                    secs = int(value % 60)
+                    return f"~{mins} мин {secs} с"
+                return f"~{int(value)} с"
             if fmt == "score100":
                 return f"{value:.0f}/100"
             if fmt == "trend":
@@ -834,16 +842,46 @@ class HTMLReportGenerator:
                 return labels.get(value, str(value))
             if fmt == "int":
                 return str(int(value))
+            if fmt == "issues_breakdown":
+                if not isinstance(value, dict):
+                    return str(value)
+                total = value.get("total", 0)
+                bs = value.get("by_severity", {}) or {}
+                bt = value.get("by_type", {}) or {}
+                sev_parts = []
+                for sev_key, sev_label in (("critical", "крит"), ("high", "выс"), ("medium", "сред"), ("low", "низ")):
+                    n = bs.get(sev_key, 0)
+                    if n:
+                        sev_parts.append(f"{sev_label}: {n}")
+                type_parts = []
+                if bt.get("usability"):
+                    type_parts.append(f"юзаб.: {bt['usability']}")
+                if bt.get("accessibility"):
+                    type_parts.append(f"дост.: {bt['accessibility']}")
+                pieces = [f"<strong>Всего: {total}</strong>"]
+                if sev_parts:
+                    pieces.append(f'<span style="color:#6b7280; font-size:0.9em;">{" · ".join(sev_parts)}</span>')
+                if type_parts:
+                    pieces.append(f'<span style="color:#6b7280; font-size:0.9em;">{" · ".join(type_parts)}</span>')
+                return "<br>".join(pieces)
+            if fmt == "overlap_placeholder":
+                if isinstance(value, dict):
+                    note = value.get("note", "Данные недоступны")
+                    return f'<span style="color:#9ca3af;">N/A</span> <span class="metric-ref">{note}</span>'
+                return '<span style="color:#9ca3af;">N/A</span>'
             return str(value)
 
         def get_color(key: str, value) -> str:
             cfg = METRICS_DISPLAY.get(key, {})
+            fmt = cfg.get("format", "")
             thresholds = cfg.get("thresholds")
+            # Composite/placeholder formats are not color-coded
+            if fmt in ("issues_breakdown", "overlap_placeholder"):
+                return "gray"
             if value is None or thresholds is None:
-                # Special cases
-                if cfg.get("format") == "bool":
+                if fmt == "bool":
                     return "green" if value else "red"
-                if cfg.get("format") == "trend":
+                if fmt == "trend":
                     return {"improving": "green", "stable": "yellow", "declining": "red"}.get(value, "gray")
                 return "gray"
             lower_better = cfg.get("lower_is_better", False)
@@ -887,11 +925,13 @@ class HTMLReportGenerator:
             # Reference info for some metrics
             ref_html = ""
             if key == "M3_relative_efficiency" and ref.get("optimal_steps"):
-                ref_html = f'<span class="metric-ref">норма: {ref["optimal_steps"]} шагов</span>'
+                ref_html = f'<span class="metric-ref">оптимум: {ref["optimal_steps"]} шагов</span>'
             elif key == "M6_lostness" and ref.get("min_pages_required"):
                 ref_html = f'<span class="metric-ref">мин. страниц: {ref["min_pages_required"]}</span>'
             elif key == "M2_steps_to_goal" and ref.get("optimal_steps"):
                 ref_html = f'<span class="metric-ref">оптимум: {ref["optimal_steps"]}</span>'
+            elif key == "M7_task_time" and ref.get("avg_step_time_used"):
+                ref_html = f'<span class="metric-ref">прокси: {ref["avg_step_time_used"]:.0f} с/шаг</span>'
 
             # Progress bar for percentage/ratio metrics
             bar_html = ""
@@ -905,6 +945,14 @@ class HTMLReportGenerator:
             elif fmt == "float" and value is not None:
                 # Lostness: 0 = best, 1.5+ = worst → invert
                 bar_pct = max(0, min(100, int((1 - value / 1.5) * 100)))
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
+            elif fmt == "ratio" and value is not None and value > 0:
+                # Ratio: 1.0 = ideal (100%), >=3 = worst (0%); invert
+                bar_pct = max(0, min(100, int((1.0 / value) * 100)))
+                bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
+            elif fmt == "seconds" and value is not None:
+                # Time: 0s = best (100%), 180s+ = worst (0%); invert
+                bar_pct = max(0, min(100, int((1 - value / 180.0) * 100)))
                 bar_html = f'''<div class="metric-bar"><div class="metric-bar-fill" style="width:{bar_pct}%; background:{bar_colors[color]};"></div></div>'''
             elif fmt == "signed_float" and value is not None:
                 bar_pct = int((value + 1) * 50)  # -1..+1 → 0..100

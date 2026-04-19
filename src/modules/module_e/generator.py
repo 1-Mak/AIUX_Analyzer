@@ -18,6 +18,8 @@ from .report_config import (
     ISSUE_ICONS,
     MODULE_STATUS,
     PERSONA_CONTEXT,
+    AVG_STEP_TIME_SEC,
+    WCAG_IMPACT_TO_SEVERITY,
     translate_axe_rule
 )
 
@@ -104,12 +106,12 @@ class ReportGenerator:
 
     def _calculate_behavioral_metrics(self) -> Dict[str, Any]:
         """
-        Calculate 13 formal UX metrics (M1-M13) from module outputs.
+        Calculate 12 formal UX metrics (M1-M12) from module outputs.
 
         Groups:
-        - Task Effectiveness (M1-M5): completion, steps, efficiency, errors, backtracks
-        - Interface Quality (M6-M9): lostness, visual/accessibility issues
-        - Subjective Experience (M10-M13): sentiment score, trend, pain points, SUS proxy
+        - Task Effectiveness (M1-M7): completion, steps, efficiency, errors, backtracks, lostness, time
+        - Interface Quality (M8-M9): unified interface issues, agent/user overlap (placeholder)
+        - Subjective Experience (M10-M12): SUS proxy, emotional trend, pain points
         """
         config = self.audit_results.get("config", {})
         module_b = self.audit_results.get("module_b_results", {}) or {}
@@ -132,16 +134,21 @@ class ReportGenerator:
         unique_pages = len(set(urls))
         total_page_visits = len(urls)
 
+        module_a_ok = bool(module_a) and "error" not in module_a and "skipped" not in module_a
+        module_c_ok = bool(module_c) and "error" not in module_c and "skipped" not in module_c
+        module_d_ok = bool(module_d) and "error" not in module_d and "skipped" not in module_d
+
         # === M1: Task Completed ===
         m1_task_completed = task_status == "completed"
 
         # === M2: Steps to Goal ===
         m2_steps_to_goal = actual_steps
 
-        # === M3: Relative Efficiency (Bevan VUUM 2008) ===
+        # === M3: Relative Efficiency (Bevan VUUM 2008, inverted form) ===
+        # actual/optimal — >=1.0, lower is better, no clamp
         m3_relative_efficiency = None
         if optimal_steps and actual_steps > 0:
-            m3_relative_efficiency = round(min(optimal_steps / actual_steps, 1.0), 3)
+            m3_relative_efficiency = round(actual_steps / optimal_steps, 3)
 
         # === M4: Error Count ===
         m4_error_count = error_count
@@ -151,41 +158,75 @@ class ReportGenerator:
 
         # === M6: Lostness (Smith 1996) ===
         # L = sqrt((N/S - 1)^2 + (R/N - 1)^2)
-        # N = unique pages, S = total page visits, R = min pages required
         m6_lostness = None
         if min_pages and unique_pages > 0 and total_page_visits > 0:
             n_over_s = unique_pages / total_page_visits
             r_over_n = min_pages / unique_pages
             m6_lostness = round(math.sqrt((n_over_s - 1) ** 2 + (r_over_n - 1) ** 2), 3)
 
-        # === M7: Visual Issues Count (Module A) ===
-        m7_visual_issues = module_a.get("total_issues", 0) if "error" not in module_a and "skipped" not in module_a else None
+        # === M7: Task Time (proxy via step count × constant) ===
+        m7_task_time = None
+        if actual_steps and actual_steps > 0:
+            m7_task_time = round(actual_steps * AVG_STEP_TIME_SEC, 1)
 
-        # === M8: Accessibility Issues Count (Module C) ===
-        m8_accessibility_issues = module_c.get("total_issues", 0) if "error" not in module_c and "skipped" not in module_c else None
+        # === M8: Interface Issues — unified composite breakdown ===
+        # Aggregate Module A (heuristic) + Module C (WCAG via WCAG_IMPACT_TO_SEVERITY)
+        by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        by_type = {"usability": 0, "accessibility": 0}
 
-        # === M9: Critical Issues Count (A + C combined) ===
-        m9_critical = 0
-        if m7_visual_issues is not None:
-            m9_critical += module_a.get("severity_breakdown", {}).get("critical", 0)
-        if m8_accessibility_issues is not None:
-            m9_critical += module_c.get("by_impact", {}).get("critical", 0)
-        m9_critical_issues = m9_critical if (m7_visual_issues is not None or m8_accessibility_issues is not None) else None
+        if module_a_ok:
+            a_sev = module_a.get("severity_breakdown", {}) or {}
+            for sev_key, count in a_sev.items():
+                norm = sev_key.lower()
+                if norm == "serious":
+                    norm = "high"
+                elif norm in ("moderate",):
+                    norm = "medium"
+                elif norm in ("minor",):
+                    norm = "low"
+                if norm in by_severity:
+                    by_severity[norm] += int(count or 0)
+            by_type["usability"] = int(module_a.get("total_issues", 0) or 0)
 
-        # === M10: Session Score (Module D) ===
-        m10_session_score = module_d.get("session_score") if "error" not in module_d and "skipped" not in module_d else None
+        if module_c_ok:
+            c_imp = module_c.get("by_impact", {}) or {}
+            for impact_key, count in c_imp.items():
+                norm = WCAG_IMPACT_TO_SEVERITY.get(impact_key.lower())
+                if norm and norm in by_severity:
+                    by_severity[norm] += int(count or 0)
+            by_type["accessibility"] = int(module_c.get("total_issues", 0) or 0)
+
+        if module_a_ok or module_c_ok:
+            total_interface_issues = sum(by_severity.values())
+            m8_interface_issues = {
+                "total": total_interface_issues,
+                "by_severity": by_severity,
+                "by_type": by_type,
+            }
+        else:
+            m8_interface_issues = None
+
+        # === M9: Issue Overlap (precision/recall vs real users) — placeholder ===
+        m9_issue_overlap = {
+            "precision": None,
+            "recall": None,
+            "note": "Требуются данные реальных пользователей для расчёта",
+        }
+
+        # === Subjective metrics derived from Module D ===
+        session_score_raw = module_d.get("session_score") if module_d_ok else None
+
+        # === M10: SUS Proxy (renamed from M13) ===
+        # Normalized: (session_score + 1) * 50 → scale 0-100
+        m10_sus_proxy = None
+        if session_score_raw is not None:
+            m10_sus_proxy = round((session_score_raw + 1) * 50, 1)
 
         # === M11: Emotional Trend ===
-        m11_trend = module_d.get("trend") if m10_session_score is not None else None
+        m11_emotional_trend = module_d.get("trend") if session_score_raw is not None else None
 
         # === M12: Pain Points Count ===
-        m12_pain_points = module_d.get("pain_points_count", 0) if m10_session_score is not None else None
-
-        # === M13: SUS Proxy ===
-        # Normalized: (session_score + 1) * 50 → scale 0-100
-        m13_sus_proxy = None
-        if m10_session_score is not None:
-            m13_sus_proxy = round((m10_session_score + 1) * 50, 1)
+        m12_pain_points_count = module_d.get("pain_points_count", 0) if session_score_raw is not None else None
 
         return {
             "task_effectiveness": {
@@ -194,24 +235,25 @@ class ReportGenerator:
                 "M3_relative_efficiency": m3_relative_efficiency,
                 "M4_error_count": m4_error_count,
                 "M5_backtrack_count": m5_backtrack_count,
+                "M6_lostness": m6_lostness,
+                "M7_task_time": m7_task_time,
             },
             "interface_quality": {
-                "M6_lostness": m6_lostness,
-                "M7_visual_issues": m7_visual_issues,
-                "M8_accessibility_issues": m8_accessibility_issues,
-                "M9_critical_issues": m9_critical_issues,
+                "M8_interface_issues": m8_interface_issues,
+                "M9_issue_overlap": m9_issue_overlap,
             },
             "subjective_experience": {
-                "M10_session_score": m10_session_score,
-                "M11_trend": m11_trend,
-                "M12_pain_points": m12_pain_points,
-                "M13_sus_proxy": m13_sus_proxy,
+                "M10_sus_proxy": m10_sus_proxy,
+                "M11_emotional_trend": m11_emotional_trend,
+                "M12_pain_points_count": m12_pain_points_count,
             },
             "reference": {
                 "optimal_steps": optimal_steps,
                 "min_pages_required": min_pages,
                 "unique_pages": unique_pages,
                 "total_page_visits": total_page_visits,
+                "session_score_raw": session_score_raw,
+                "avg_step_time_used": AVG_STEP_TIME_SEC,
             }
         }
 
@@ -290,9 +332,9 @@ class ReportGenerator:
             m4 = te.get("M4_error_count", 0)
             m5 = te.get("M5_backtrack_count", 0)
 
-            # Base: efficiency if available, else status-based fallback
-            if m3 is not None:
-                base = m3
+            # Base: invert M3 (now actual/optimal, >=1.0) back to 0..1 score
+            if m3 is not None and m3 > 0:
+                base = min(1.0 / m3, 1.0)
             else:
                 task_status = self._normalize_task_status(module_b.get("task_status", "failed"))
                 base = {"completed": 0.8, "partial": 0.5, "failed": 0.2, "max_steps_reached": 0.3}.get(task_status, 0.4)
