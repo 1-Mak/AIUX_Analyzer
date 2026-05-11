@@ -162,6 +162,14 @@ class BehaviorStep(BaseModel):
         default=False,
         description="True if agent returned to a previously visited URL (signal of disorientation)"
     )
+    started_at_offset_sec: Optional[float] = Field(
+        default=None,
+        description="Step start time as seconds since the simulation began (for time-on-task metric M7)"
+    )
+    duration_sec: Optional[float] = Field(
+        default=None,
+        description="Wall-clock seconds the step took (observe + reason + act), excluding the human-pacing delay between steps"
+    )
 
 
 class AccessibilityIssue(BaseModel):

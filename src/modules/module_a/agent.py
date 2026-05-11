@@ -101,6 +101,149 @@ class ModuleA:
             logger.error(f"Error during visual analysis: {e}", exc_info=True)
             raise
 
+    def analyze_session_screenshots(
+        self,
+        screenshots: List[Path],
+        persona_name: Optional[str] = None,
+        session_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """
+        Analyze a sequence of session screenshots (e.g. step_01_screenshot.png ...).
+
+        Each screenshot is sent to the vision model independently; resulting issues are
+        merged across steps with deduplication on (heuristic, location). When the same
+        issue is reported on multiple steps the highest severity wins and step_ids are
+        accumulated for traceability.
+
+        Args:
+            screenshots: ordered list of screenshot paths (typically step_*.png from Module B)
+            persona_name: persona for prompt context
+            session_dir: if provided, the aggregated result is saved as
+                module_a_visual_analysis.json
+
+        Returns:
+            Dict with keys: issues (list of dedup'd issue dicts incl. step_ids),
+            summary, per_step (list of {step_id, total_issues, error?}).
+        """
+        if not screenshots:
+            raise ValueError("analyze_session_screenshots requires at least one screenshot")
+
+        per_step: List[Dict[str, Any]] = []
+        all_issues_with_step: List[tuple] = []  # (step_id, VisualIssue)
+
+        for sp in screenshots:
+            step_id = self._extract_step_id(sp)
+            try:
+                step_result = self.analyze_screenshot(
+                    screenshot_path=sp,
+                    persona_name=persona_name,
+                    session_dir=None,  # don't save per-step to disk; we save aggregate below
+                )
+                step_issues = step_result.get("issues", [])
+                per_step.append({
+                    "step_id": step_id,
+                    "screenshot": sp.name,
+                    "total_issues": len(step_issues),
+                })
+                for iss in step_issues:
+                    all_issues_with_step.append((step_id, iss))
+            except Exception as e:
+                logger.warning(f"Module A failed on {sp.name}: {e}")
+                per_step.append({
+                    "step_id": step_id,
+                    "screenshot": sp.name,
+                    "error": str(e),
+                })
+
+        merged_issues = self._dedupe_issues(all_issues_with_step)
+        summary = self._calculate_summary_from_dicts(merged_issues)
+
+        result = {
+            "issues_dicts": merged_issues,  # already serializable
+            "summary": summary,
+            "per_step": per_step,
+        }
+
+        if session_dir:
+            output_file = Path(session_dir) / "module_a_visual_analysis.json"
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "issues": merged_issues,
+                    "summary": summary,
+                    "per_step": per_step,
+                }, f, ensure_ascii=False, indent=2)
+            logger.info(f"Aggregated Module A results saved to: {output_file}")
+
+        return result
+
+    @staticmethod
+    def _extract_step_id(path: Path) -> Optional[int]:
+        """Extract step number from a 'step_NN_*.png' filename, returning None if absent."""
+        import re as _re
+        m = _re.search(r"step_(\d+)", path.stem)
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _dedupe_issues(issues_with_step: List[tuple]) -> List[Dict[str, Any]]:
+        """Merge issues across steps by (heuristic_norm, location_norm).
+        Highest severity wins; step_ids list grows; first-seen title/description/recommendation kept."""
+        severity_rank = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+        bucket: Dict[tuple, Dict[str, Any]] = {}
+
+        def norm(s: str) -> str:
+            return " ".join((s or "").strip().lower().split())
+
+        for step_id, issue in issues_with_step:
+            key = (norm(issue.heuristic), norm(issue.location))
+            d = issue.dict()
+            if key not in bucket:
+                d["step_ids"] = [step_id] if step_id is not None else []
+                bucket[key] = d
+            else:
+                existing = bucket[key]
+                if step_id is not None and step_id not in existing["step_ids"]:
+                    existing["step_ids"].append(step_id)
+                # Promote to higher severity if new is more severe; carry that issue's prose
+                if severity_rank.get(d["severity"], 99) < severity_rank.get(existing["severity"], 99):
+                    existing["severity"] = d["severity"]
+                    existing["title"] = d["title"]
+                    existing["description"] = d["description"]
+                    existing["recommendation"] = d["recommendation"]
+
+        # Stable sort: severity desc, then number of confirming steps desc
+        return sorted(
+            bucket.values(),
+            key=lambda x: (severity_rank.get(x["severity"], 99), -len(x.get("step_ids", []))),
+        )
+
+    @staticmethod
+    def _calculate_summary_from_dicts(issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Same shape as _calculate_summary but operates on dicts (post-dedup)."""
+        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for d in issues:
+            sev = (d.get("severity") or "").lower()
+            if sev in counts:
+                counts[sev] += 1
+        total = len(issues)
+        if counts["critical"] > 0:
+            assessment = f"Обнаружены критические проблемы ({counts['critical']}), требующие немедленного исправления."
+        elif counts["high"] > 2:
+            assessment = f"Найдено {counts['high']} серьезных проблем, снижающих юзабилити."
+        elif total > 5:
+            assessment = f"Выявлено {total} проблем различной степени серьезности."
+        elif total > 0:
+            assessment = f"Обнаружены минорные недочеты UX ({total}), не критичные для функциональности."
+        else:
+            assessment = "Критических проблем не обнаружено. Интерфейс соответствует основным эвристикам юзабилити."
+        return {
+            "total_issues": total,
+            "critical": counts["critical"],
+            "high": counts["high"],
+            "medium": counts["medium"],
+            "low": counts["low"],
+            "overall_assessment": assessment,
+        }
+
     def _parse_llm_response(self, raw_response: Dict[str, Any]) -> Dict[str, Any]:
         """
         Parse and validate LLM's JSON response
@@ -284,7 +427,7 @@ class ModuleA:
 
 def demo_module_a():
     """Demo usage of Module A"""
-    from src.config import SCREENSHOTS_DIR, OPENAI_MODEL
+    from src.config import SESSIONS_DIR, OPENAI_MODEL
 
     # Check for API key
     if not OPENAI_API_KEY:
@@ -293,7 +436,7 @@ def demo_module_a():
         return
 
     # Find latest screenshot
-    screenshots = list(SCREENSHOTS_DIR.glob("*/baseline_screenshot_grid.png"))
+    screenshots = list(SESSIONS_DIR.glob("*/baseline_screenshot_grid.png"))
     if not screenshots:
         print("❌ No screenshots found. Run main.py first to capture baseline.")
         return

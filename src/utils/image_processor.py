@@ -155,13 +155,13 @@ class ImageProcessor:
 
 def demo_usage():
     """Demo usage of ImageProcessor"""
-    from src.config import SCREENSHOTS_DIR
+    from src.config import SESSIONS_DIR
 
     processor = ImageProcessor(grid_size=100)
 
     # Example: Add grid to a screenshot
-    input_path = SCREENSHOTS_DIR / "demo_screenshot.png"
-    output_path = SCREENSHOTS_DIR / "demo_screenshot_grid.png"
+    input_path = SESSIONS_DIR / "demo_screenshot.png"
+    output_path = SESSIONS_DIR / "demo_screenshot_grid.png"
 
     if input_path.exists():
         print(f"Adding grid overlay to {input_path}...")

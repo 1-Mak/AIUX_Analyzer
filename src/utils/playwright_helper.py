@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 from playwright.async_api import async_playwright, Page, Browser
 from src.config import (
-    SCREENSHOTS_DIR,
+    SESSIONS_DIR,
     DEFAULT_VIEWPORT_WIDTH,
     DEFAULT_VIEWPORT_HEIGHT,
     SCREENSHOT_TIMEOUT
@@ -82,13 +82,13 @@ class PlaywrightHelper:
         Args:
             filename: Name of the screenshot file
             full_page: Whether to capture the full scrollable page
-            path: Custom path to save screenshot (default: SCREENSHOTS_DIR)
+            path: Custom path to save screenshot (default: SESSIONS_DIR)
 
         Returns:
             Path to the saved screenshot
         """
         if path is None:
-            path = SCREENSHOTS_DIR
+            path = SESSIONS_DIR
 
         screenshot_path = path / filename
 

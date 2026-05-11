@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+from src.config import translate_heuristic
 from .report_config import (
     REPORT_SECTIONS,
     SEVERITY_ORDER,
@@ -20,6 +21,7 @@ from .report_config import (
     PERSONA_CONTEXT,
     AVG_STEP_TIME_SEC,
     WCAG_IMPACT_TO_SEVERITY,
+    RULE_KEYWORDS_RU,
     translate_axe_rule
 )
 
@@ -164,10 +166,19 @@ class ReportGenerator:
             r_over_n = min_pages / unique_pages
             m6_lostness = round(math.sqrt((n_over_s - 1) ** 2 + (r_over_n - 1) ** 2), 3)
 
-        # === M7: Task Time (proxy via step count × constant) ===
+        # === M7: Task Time ===
+        # Prefer real wall-clock measurements emitted by Module B (sum of per-step durations).
+        # Fall back to the legacy constant-based proxy only for older logs without timing fields.
         m7_task_time = None
-        if actual_steps and actual_steps > 0:
+        m7_task_time_source = None
+        if steps:
+            timed_steps = [s for s in steps if isinstance(s.get("duration_sec"), (int, float))]
+            if timed_steps:
+                m7_task_time = round(sum(s["duration_sec"] for s in timed_steps), 1)
+                m7_task_time_source = "measured"
+        if m7_task_time is None and actual_steps and actual_steps > 0:
             m7_task_time = round(actual_steps * AVG_STEP_TIME_SEC, 1)
+            m7_task_time_source = "proxy_constant"
 
         # === M8: Interface Issues — unified composite breakdown ===
         # Aggregate Module A (heuristic) + Module C (WCAG via WCAG_IMPACT_TO_SEVERITY)
@@ -206,12 +217,14 @@ class ReportGenerator:
         else:
             m8_interface_issues = None
 
-        # === M9: Issue Overlap (precision/recall vs real users) — placeholder ===
-        m9_issue_overlap = {
-            "precision": None,
-            "recall": None,
-            "note": "Требуются данные реальных пользователей для расчёта",
-        }
+        # === M9: Issue Overlap — cross-module agreement proxy ===
+        # In the absence of real-user ground truth, we use inter-module agreement
+        # between Module A (Nielsen heuristics) and Module C (WCAG accessibility) as
+        # a proxy: an issue confirmed by both modules counts as "ground truth".
+        # precision_proxy = matched_A / |A|: how concentrated visual findings are around
+        #   issues that the accessibility scan also flags
+        # recall_proxy = matched_C / |C|: how well visual analysis covers accessibility issues
+        m9_issue_overlap = self._compute_module_agreement(module_a_ok, module_c_ok)
 
         # === Subjective metrics derived from Module D ===
         session_score_raw = module_d.get("session_score") if module_d_ok else None
@@ -254,7 +267,116 @@ class ReportGenerator:
                 "total_page_visits": total_page_visits,
                 "session_score_raw": session_score_raw,
                 "avg_step_time_used": AVG_STEP_TIME_SEC,
+                "m7_task_time_source": m7_task_time_source,  # "measured" | "proxy_constant" | None
             }
+        }
+
+    def _compute_module_agreement(self, module_a_ok: bool, module_c_ok: bool) -> Dict[str, Any]:
+        """Cross-module agreement proxy for M9.
+
+        Builds a curated concept-keyword map per axe rule (RULE_KEYWORDS_RU) and checks
+        whether each Module A issue's prose mentions any of the same concepts a Module C
+        rule covers. This is more accurate than blind word overlap because it uses an
+        explicit semantic mapping between Nielsen-style descriptions and WCAG rules.
+
+        precision_proxy = (Module A issues that conceptually overlap with at least one
+                           Module C rule) / |A|
+        recall_proxy    = (Module C rules conceptually covered by at least one Module A
+                           issue) / |C|
+        """
+        if not (module_a_ok and module_c_ok):
+            return {
+                "precision": None,
+                "recall": None,
+                "note": "Недоступно: для расчёта нужны результаты обоих модулей (визуальный + доступность)",
+            }
+
+        # Stem to first 5 chars (handles Russian morphology while keeping distinct roots).
+        def stem_set(text: str) -> set:
+            tokens = re.sub(r"[^\w\s]", " ", text.lower()).split()
+            return {t[:5] for t in tokens if len(t) > 2}
+
+        # Pre-stem the rule keyword vocabulary once
+        rule_keyword_stems = {
+            rule: {kw[:5] for kw in kws}
+            for rule, kws in RULE_KEYWORDS_RU.items()
+        }
+
+        # Load Module A issues -> stemmed word sets
+        a_issues_words: List[set] = []
+        ma_file = self.session_dir / "module_a_visual_analysis.json"
+        if ma_file.exists():
+            try:
+                ma_data = json.load(open(ma_file, "r", encoding="utf-8"))
+                for issue in ma_data.get("issues", []):
+                    parts = [
+                        issue.get("title", ""),
+                        issue.get("description", ""),
+                        translate_heuristic(issue.get("heuristic", "")),
+                        issue.get("location", ""),
+                    ]
+                    a_issues_words.append(stem_set(" ".join(parts)))
+            except Exception:
+                pass
+
+        # Load Module C issues -> rule_ids
+        c_rule_ids: List[str] = []
+        mc_file = self.session_dir / "module_c_accessibility_scan.json"
+        if mc_file.exists():
+            try:
+                mc_data = json.load(open(mc_file, "r", encoding="utf-8"))
+                for issue in mc_data.get("issues", mc_data.get("all_issues", [])):
+                    rid = issue.get("id", "")
+                    if rid:
+                        c_rule_ids.append(rid)
+            except Exception:
+                pass
+
+        a_total = len(a_issues_words)
+        c_total = len(c_rule_ids)
+
+        if a_total == 0 or c_total == 0:
+            return {
+                "precision": None,
+                "recall": None,
+                "matched_pairs": 0,
+                "total_a": a_total,
+                "total_c": c_total,
+                "note": "Недостаточно проблем для сопоставления (один из модулей пуст)",
+            }
+
+        a_matched = 0
+        c_matched_set: set = set()
+        unmapped_rules = 0
+        for a_words in a_issues_words:
+            for c_idx, rule_id in enumerate(c_rule_ids):
+                kw_stems = rule_keyword_stems.get(rule_id)
+                if not kw_stems:
+                    continue
+                if a_words & kw_stems:
+                    c_matched_set.add(c_idx)
+                    if c_idx not in {None}:  # mark a as matched on first hit
+                        a_matched += 1
+                        break
+        # Count rules without mapping for transparency
+        for rule_id in c_rule_ids:
+            if rule_id not in rule_keyword_stems:
+                unmapped_rules += 1
+
+        precision = round(a_matched / a_total, 2)
+        recall = round(len(c_matched_set) / c_total, 2)
+
+        note = "Прокси: межмодульное согласие визуального анализа и аудита доступности"
+        if unmapped_rules:
+            note += f" (для {unmapped_rules} правил WCAG нет концептуального словаря)"
+
+        return {
+            "precision": precision,
+            "recall": recall,
+            "matched_pairs": a_matched,
+            "total_a": a_total,
+            "total_c": c_total,
+            "note": note,
         }
 
     def _compute_navigation_metrics(self) -> Dict[str, Any]:
@@ -423,7 +545,7 @@ class ReportGenerator:
                         with open(module_a_file, "r", encoding="utf-8") as f:
                             data = json.load(f)
                         for issue in data.get("issues", []):
-                            h = issue.get("heuristic", "")
+                            h = translate_heuristic(issue.get("heuristic", ""))
                             if h and h not in top_heuristics and issue.get("severity", "").lower() in ("critical", "high"):
                                 top_heuristics.append(h)
                             if len(top_heuristics) >= 3:
@@ -724,6 +846,9 @@ class ReportGenerator:
                 "trend": module_d.get("trend", "stable"),
                 "distribution": module_d.get("distribution", {}),
                 "pain_points_count": module_d.get("pain_points_count", 0),
+                "pain_points_by_cause": module_d.get("pain_points_by_cause", {}),
+                "step_scores": module_d.get("step_scores", []),
+                "step_trajectory": module_d.get("step_trajectory", []),
                 "insights": module_d.get("insights", [])
             }
 
@@ -793,7 +918,7 @@ class ReportGenerator:
                             "title": title,
                             "description": desc,
                             "location": issue.get("location", ""),
-                            "heuristic": issue.get("heuristic", ""),
+                            "heuristic": translate_heuristic(issue.get("heuristic", "")),
                             "recommendation": issue.get("recommendation", "")
                         })
             except Exception:
@@ -810,8 +935,14 @@ class ReportGenerator:
                         severity_map = {"critical": "critical", "serious": "high", "moderate": "medium", "minor": "low"}
                         occurrences = issue.get("total_occurrences", len(issue.get("nodes", [])))
                         rule_id = issue.get("id", "")
-                        title_ru = translate_axe_rule(rule_id, issue.get("help", "Проблема доступности"))
-                        desc_ru = issue.get("description_ru", "")
+                        # Always Russian title; if rule unknown, label by rule_id (still no English prose)
+                        fallback = f"Нарушение WCAG: {rule_id}" if rule_id else "Проблема доступности"
+                        title_ru = translate_axe_rule(rule_id, fallback)
+                        # Keep description only if Module C actually translated it (otherwise Russian field
+                        # may still hold the English source — in that case drop to avoid leaking English).
+                        desc_en = issue.get("description", "")
+                        desc_ru_raw = issue.get("description_ru", "")
+                        desc_ru = desc_ru_raw if desc_ru_raw and desc_ru_raw != desc_en else ""
                         wcag_tags = [t for t in issue.get("tags", []) if t.startswith("wcag")]
                         all_issues.append({
                             "source": "Аудит доступности",

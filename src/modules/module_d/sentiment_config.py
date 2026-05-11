@@ -10,12 +10,24 @@ SENTIMENT_WEIGHTS: Dict[str, int] = {
     "NEGATIVE": -1
 }
 
-# Thresholds for trend detection
+# Thresholds for trend detection (applied to slope of per-step numeric scores)
 TREND_THRESHOLDS: Dict[str, float] = {
-    "improving": 0.2,    # Difference > 0.2 = improving
-    "declining": -0.2,   # Difference < -0.2 = declining
+    "improving": 0.05,   # Slope > +0.05 per step = improving
+    "declining": -0.05,  # Slope < -0.05 per step = declining
     "stable": 0.0        # Otherwise = stable
 }
+
+# Behavioral adjustments applied per step on top of resolved sentiment.
+# Numeric, range [-1.0, +1.0], summed with sentiment weight then clamped.
+BEHAVIORAL_ADJUSTMENTS: Dict[str, float] = {
+    "failure": -0.4,            # Action did not succeed
+    "backtrack": -0.25,         # Had to go back to previous page
+    "stuck_on_page": -0.35,     # 3+ consecutive steps on the same URL
+    "success_navigation": 0.10, # Successful click/navigate to a new page
+}
+
+# How many consecutive steps on the same URL count as "stuck"
+STUCK_THRESHOLD_STEPS: int = 3
 
 # Emotion categories for detailed analysis (Russian keywords)
 EMOTION_CATEGORIES: Dict[str, List[str]] = {

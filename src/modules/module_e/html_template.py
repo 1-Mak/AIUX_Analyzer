@@ -23,7 +23,7 @@ class HTMLReportGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UX Audit Report</title>
+    <title>Отчёт UX-аудита</title>
     <style>
 {self._get_styles()}
     </style>
@@ -609,7 +609,7 @@ class HTMLReportGenerator:
 
         return f"""
         <div class="header">
-            <h1>UX Audit Report</h1>
+            <h1>Отчёт UX-аудита</h1>
             <div class="meta">
                 <div><strong>URL:</strong> {meta.get('url', 'N/A')}</div>
                 <div><strong>Персона:</strong> {persona.get('name', 'N/A')} &mdash; {persona.get('description', '')}</div>
@@ -866,7 +866,22 @@ class HTMLReportGenerator:
                 return "<br>".join(pieces)
             if fmt == "overlap_placeholder":
                 if isinstance(value, dict):
-                    note = value.get("note", "Данные недоступны")
+                    p = value.get("precision")
+                    r = value.get("recall")
+                    note = value.get("note", "")
+                    if p is not None and r is not None:
+                        matched = value.get("matched_pairs", 0)
+                        total_a = value.get("total_a", 0)
+                        total_c = value.get("total_c", 0)
+                        # Color the higher of the two; both >= 0.5 = green, both >= 0.3 = yellow
+                        worst = min(p, r)
+                        col = "#16a34a" if worst >= 0.5 else ("#eab308" if worst >= 0.3 else "#ef4444")
+                        return (
+                            f'<strong style="color:{col};">P: {int(p*100)}%</strong> · '
+                            f'<strong style="color:{col};">R: {int(r*100)}%</strong>'
+                            f'<br><span style="color:#6b7280; font-size:0.85em;">'
+                            f'согласовано {matched} из {total_a}/{total_c}</span>'
+                        )
                     return f'<span style="color:#9ca3af;">N/A</span> <span class="metric-ref">{note}</span>'
                 return '<span style="color:#9ca3af;">N/A</span>'
             return str(value)
@@ -930,8 +945,6 @@ class HTMLReportGenerator:
                 ref_html = f'<span class="metric-ref">мин. страниц: {ref["min_pages_required"]}</span>'
             elif key == "M2_steps_to_goal" and ref.get("optimal_steps"):
                 ref_html = f'<span class="metric-ref">оптимум: {ref["optimal_steps"]}</span>'
-            elif key == "M7_task_time" and ref.get("avg_step_time_used"):
-                ref_html = f'<span class="metric-ref">прокси: {ref["avg_step_time_used"]:.0f} с/шаг</span>'
 
             # Progress bar for percentage/ratio metrics
             bar_html = ""
@@ -1065,18 +1078,86 @@ class HTMLReportGenerator:
         except Exception:
             return ""
 
-    def _render_emotion_bar(self, timeline: list) -> str:
-        """Render horizontal emotion gradient bar from timeline sentiments"""
+    def _render_score_sparkline(self, scores: list) -> str:
+        """Mini SVG line chart of per-step numeric scores in [-1, 1].
+        Returns a stat-row block; empty string if no scores available."""
+        if not scores:
+            return ""
+        w, h, pad = 180, 36, 4
+        n = len(scores)
+        if n == 1:
+            xs = [w / 2]
+        else:
+            xs = [pad + i * (w - 2 * pad) / (n - 1) for i in range(n)]
+        # Map score [-1, 1] -> y [h - pad, pad] (inverted so +1 is up)
+        def y_of(s):
+            s = max(-1.0, min(1.0, float(s)))
+            return pad + (1 - (s + 1) / 2) * (h - 2 * pad)
+        ys = [y_of(s) for s in scores]
+        zero_y = y_of(0)
+        path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+        # Per-point dots colored by sign
+        dots = ""
+        for x, y, s in zip(xs, ys, scores):
+            color = "#16a34a" if s > 0.05 else ("#dc2626" if s < -0.05 else "#94a3b8")
+            dots += f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.5" fill="{color}"><title>{float(s):+.2f}</title></circle>'
+        svg = (
+            f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
+            f'style="display:block;">'
+            f'<line x1="0" y1="{zero_y:.1f}" x2="{w}" y2="{zero_y:.1f}" stroke="#e5e7eb" stroke-dasharray="2,2"/>'
+            f'<path d="{path}" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linejoin="round"/>'
+            f'{dots}'
+            f'</svg>'
+        )
+        return f"""
+        <div class="stat-row">
+            <span class="stat-label">Траектория</span>
+            <span class="stat-value" style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
+                {svg}
+                <span style="font-size:0.7em; color:#9ca3af;">шаги 1—{n}, диапазон −1…+1</span>
+            </span>
+        </div>
+        """
+
+    def _render_pain_cause_breakdown(self, total: int, by_cause: dict) -> str:
+        """Show pain points breakdown by cause (failure / stuck / backtrack / negative_sentiment)"""
+        if not total or not by_cause:
+            return ""
+        labels = {
+            "failure": "ошибки",
+            "stuck": "застревания",
+            "backtrack": "возвраты",
+            "negative_sentiment": "негатив",
+        }
+        parts = []
+        for cause_key, label in labels.items():
+            count = by_cause.get(cause_key, 0)
+            if count:
+                parts.append(f"{label}: {count}")
+        if not parts:
+            return ""
+        return f"""
+        <div class="stat-row">
+            <span class="stat-label" style="font-size:0.8em; color:#9ca3af;">причины</span>
+            <span class="stat-value" style="font-size:0.78em; color:#6b7280;">{' · '.join(parts)}</span>
+        </div>
+        """
+
+    def _render_emotion_bar(self, timeline: list, resolved_sentiments: dict = None) -> str:
+        """Render horizontal emotion gradient bar from timeline sentiments.
+        If resolved_sentiments {step_id: sentiment} is provided, prefer those over Module B raw."""
         if not timeline:
             return ""
+        resolved_sentiments = resolved_sentiments or {}
         colors = {"POSITIVE": "#22c55e", "NEUTRAL": "#94a3b8", "NEGATIVE": "#ef4444"}
         n = len(timeline)
         segments = ""
         for step in timeline:
-            sentiment = step.get("sentiment", "NEUTRAL")
+            sid = step.get("step_id", "")
+            sentiment = resolved_sentiments.get(sid) or step.get("sentiment", "NEUTRAL")
             c = colors.get(sentiment, "#94a3b8")
             w = 100 / n
-            segments += f'<div class="seg" style="width:{w:.2f}%; background:{c};" title="Шаг {step.get("step_id", "")} — {sentiment}"></div>'
+            segments += f'<div class="seg" style="width:{w:.2f}%; background:{c};" title="Шаг {sid} — {sentiment}"></div>'
 
         return f"""
         <div class="emotion-bar-wrap">
@@ -1109,8 +1190,17 @@ class HTMLReportGenerator:
             "unknown": "Действие",
         }
 
+        # Resolved sentiments from Module D (hybrid + behavioral) keep emotion bar and step circles
+        # consistent with the Module D card. Falls back to Module B raw sentiment when missing.
+        module_d = self.data.get("module_summaries", {}).get("module_d", {})
+        resolved_sentiments = {
+            entry.get("step_id"): entry.get("sentiment")
+            for entry in module_d.get("step_trajectory", [])
+            if entry.get("step_id") is not None
+        }
+
         # Emotion bar
-        emotion_bar_html = self._render_emotion_bar(timeline)
+        emotion_bar_html = self._render_emotion_bar(timeline, resolved_sentiments=resolved_sentiments)
 
         items_html = ""
         for step in timeline:
@@ -1119,7 +1209,7 @@ class HTMLReportGenerator:
             target = step.get("action_target", "")
             reasoning = step.get("reasoning", "")
             url = step.get("url", "")
-            sentiment = step.get("sentiment", "NEUTRAL")
+            sentiment = resolved_sentiments.get(step_id) or step.get("sentiment", "NEUTRAL")
             ux_observation = step.get("ux_observation")
             is_backtrack = step.get("is_backtrack", False)
 
@@ -1537,6 +1627,9 @@ class HTMLReportGenerator:
             score = m.get("session_score", 0)
             dist = m.get("distribution", {})
 
+            sparkline_html = self._render_score_sparkline(m.get("step_scores", []))
+            causes_html = self._render_pain_cause_breakdown(m.get("pain_points_count", 0), m.get("pain_points_by_cause", {}))
+
             cards_html += f"""
             <div class="module-card">
                 <h3>
@@ -1552,10 +1645,12 @@ class HTMLReportGenerator:
                         <span class="stat-label">Тренд</span>
                         <span class="stat-value" style="color: {trend_color};">{trend}</span>
                     </div>
+                    {sparkline_html}
                     <div class="stat-row">
                         <span class="stat-label">Болевые точки</span>
                         <span class="stat-value" style="color: #dc2626;">{m.get('pain_points_count', 0)}</span>
                     </div>
+                    {causes_html}
                     <div class="stat-row">
                         <span class="stat-label">Распределение</span>
                         <span class="stat-value" style="font-size: 0.85em;">
@@ -1753,7 +1848,7 @@ class HTMLReportGenerator:
 
         return f"""
         <div class="footer">
-            <p><strong>UX AI Audit System</strong></p>
+            <p><strong>Система UX-аудита на основе ИИ</strong></p>
             <p>Дата генерации: {generated}</p>
         </div>
         """

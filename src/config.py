@@ -12,12 +12,12 @@ load_dotenv()
 # Project root directory
 ROOT_DIR = Path(__file__).parent.parent
 DATA_DIR = ROOT_DIR / "data"
-SCREENSHOTS_DIR = DATA_DIR / "screenshots"
+SESSIONS_DIR = DATA_DIR / "sessions"
 REPORTS_DIR = DATA_DIR / "reports"
 LOGS_DIR = ROOT_DIR / "logs"
 
 # Create directories if they don't exist
-SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +85,30 @@ NIELSEN_HEURISTICS = [
     "Help users recognize, diagnose, and recover from errors",
     "Help and documentation"
 ]
+
+# Russian display labels for Nielsen heuristics (used in reports)
+# Keys are normalized lowercase form of the canonical English name; LLM output
+# is matched case-insensitively and whitespace-tolerantly via translate_heuristic().
+NIELSEN_HEURISTICS_RU = {
+    "visibility of system status": "Видимость состояния системы",
+    "match between system and the real world": "Соответствие системы реальному миру",
+    "user control and freedom": "Свобода и контроль пользователя",
+    "consistency and standards": "Согласованность и стандарты",
+    "error prevention": "Предотвращение ошибок",
+    "recognition rather than recall": "Распознавание вместо припоминания",
+    "flexibility and efficiency of use": "Гибкость и эффективность использования",
+    "aesthetic and minimalist design": "Эстетичный и минималистичный дизайн",
+    "help users recognize, diagnose, and recover from errors": "Помощь в распознавании и устранении ошибок",
+    "help and documentation": "Справка и документация",
+}
+
+
+def translate_heuristic(name: str) -> str:
+    """Return Russian label for a Nielsen heuristic; passes through unknown values unchanged."""
+    if not name:
+        return ""
+    key = " ".join(name.lower().split()).rstrip(".")
+    return NIELSEN_HEURISTICS_RU.get(key, name)
 
 # Personas (Module B) - Educational Context
 PERSONAS = {

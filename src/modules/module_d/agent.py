@@ -301,17 +301,14 @@ async def demo_module_d(use_reasoner: bool = False):
     Args:
         use_reasoner: Use DeepSeek Reasoner for deeper analysis
     """
-    from pathlib import Path
+    from src.config import SESSIONS_DIR
 
-    # Find a behavioral log to analyze
-    screenshots_dir = Path("screenshots")
-
-    if not screenshots_dir.exists():
-        print("No screenshots directory found")
+    if not SESSIONS_DIR.exists():
+        print("No sessions directory found")
         return
 
     # Find latest session with behavioral log
-    behavioral_logs = list(screenshots_dir.glob("*/module_b_behavioral_log.json"))
+    behavioral_logs = list(SESSIONS_DIR.glob("*/module_b_behavioral_log.json"))
 
     if not behavioral_logs:
         print("No behavioral logs found")

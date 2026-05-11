@@ -115,11 +115,15 @@ class ModuleB:
             step_id = 0
             termination_reason = None
             task_status = "in_progress"
+            import time as _time
+            session_start = _time.monotonic()
 
             # ReAct Loop
             while step_id < self.max_steps:
                 step_id += 1
                 print(f"     Шаг {step_id}/{self.max_steps}...", end=" ")
+
+                step_started_at = _time.monotonic()
 
                 # OBSERVE - Get current page state
                 state = await self._observe_state(helper, step_id)
@@ -131,6 +135,11 @@ class ModuleB:
                 # ACT - Execute the decided action
                 action_result = await self._execute_action(llm_decision.get("next_action", {}))
 
+                # Measure wall-clock cost of this step (observe + reason + act),
+                # excluding the artificial human-pacing sleep that follows.
+                step_duration = round(_time.monotonic() - step_started_at, 3)
+                step_offset = round(step_started_at - session_start, 3)
+
                 # Build result summary for history
                 result_summary = self._make_result_summary(
                     llm_decision.get("next_action", {}), action_result
@@ -141,7 +150,9 @@ class ModuleB:
                     step_id=step_id,
                     state=state,
                     llm_decision=llm_decision,
-                    action_result=action_result
+                    action_result=action_result,
+                    started_at_offset_sec=step_offset,
+                    duration_sec=step_duration,
                 )
                 self.state_tracker.add_step(step, result_summary)
 
@@ -429,7 +440,9 @@ class ModuleB:
         step_id: int,
         state: Dict[str, Any],
         llm_decision: Dict[str, Any],
-        action_result: Dict[str, Any]
+        action_result: Dict[str, Any],
+        started_at_offset_sec: Optional[float] = None,
+        duration_sec: Optional[float] = None,
     ) -> BehaviorStep:
         """
         Create a BehaviorStep record
@@ -473,7 +486,9 @@ class ModuleB:
             status="success" if action_result.get("status") == "success" else "failure",
             url=state.get("url", ""),
             sentiment=llm_decision.get("emotional_state", "NEUTRAL"),
-            ux_observation=ux_observation
+            ux_observation=ux_observation,
+            started_at_offset_sec=started_at_offset_sec,
+            duration_sec=duration_sec,
             # is_backtrack is set by state_tracker.add_step()
         )
 
@@ -540,12 +555,12 @@ class ModuleB:
 
 async def demo_module_b():
     """Demo usage of Module B"""
-    from src.config import SCREENSHOTS_DIR
+    from src.config import SESSIONS_DIR
 
     # Create test session directory
     from datetime import datetime
     session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    session_dir = SCREENSHOTS_DIR / session_id
+    session_dir = SESSIONS_DIR / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"📁 Session directory: {session_dir}")

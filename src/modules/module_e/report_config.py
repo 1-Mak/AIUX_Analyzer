@@ -147,6 +147,39 @@ def translate_axe_rule(rule_id: str, fallback: str = "") -> str:
     return AXE_RULES_RU.get(rule_id, fallback)
 
 
+# Concept keywords (Russian, will be 5-char-stemmed at compare time) for each axe rule.
+# Used by M9 cross-module agreement to detect when Module A's prose covers the same
+# UX concept as a Module C accessibility rule.
+RULE_KEYWORDS_RU = {
+    "color-contrast": {"контраст", "цвет", "читаем", "различ", "тускл", "блекл"},
+    "image-alt": {"изображ", "картин", "альтер", "alt", "описан"},
+    "input-image-alt": {"изображ", "альтер", "alt", "кнопк"},
+    "button-name": {"кнопк", "подпис", "назван", "понятн", "label"},
+    "link-name": {"ссылк", "назван", "понятн", "якорь"},
+    "html-has-lang": {"язык", "lang"},
+    "html-lang-valid": {"язык", "lang"},
+    "document-title": {"заголов", "title", "назван", "вкладк"},
+    "label": {"подпис", "форма", "поле", "ввод", "label"},
+    "meta-viewport": {"масштаб", "viewport", "мобиль", "адаптив"},
+    "tabindex": {"клавиа", "фокус", "tab", "табул"},
+    "scrollable-region-focusable": {"клавиа", "фокус", "скролл", "прокру"},
+    "region": {"навига", "ландма", "регион", "header", "footer", "структу", "шапк", "подвал"},
+    "bypass": {"пропус", "skip", "клавиа", "навига"},
+    "heading-order": {"заголов", "иерарх", "h1", "h2", "уровен"},
+    "list": {"список", "перечен"},
+    "listitem": {"список", "перечен", "пункт"},
+    "duplicate-id": {"дублир", "уникаль"},
+    "frame-title": {"фрейм", "iframe", "заголов"},
+    "select-name": {"выпада", "select", "подпис", "форма"},
+    "nested-interactive": {"вложен", "интерак", "кнопк", "ссылк"},
+    "aria-allowed-attr": {"aria", "роль", "атрибу"},
+    "aria-required-attr": {"aria", "роль", "атрибу", "обязат"},
+    "aria-valid-attr": {"aria", "роль", "атрибу"},
+    "aria-roles": {"aria", "роль"},
+    "aria-command-name": {"aria", "кнопк", "ссылк", "меню", "назван"},
+}
+
+
 # Average step time in seconds for proxy task time calculation (M7).
 # Agent doesn't measure real time, so we use a constant per step.
 AVG_STEP_TIME_SEC = 8.0
@@ -197,14 +230,14 @@ METRICS_DISPLAY = {
         "lower_is_better": True,
     },
     "M6_lostness": {
-        "name_ru": "Потерянность (Lostness)",
+        "name_ru": "Потерянность",
         "group": "task_effectiveness",
         "format": "float",
         "thresholds": {"green": 0.4, "yellow": 0.7},
         "lower_is_better": True,
     },
     "M7_task_time": {
-        "name_ru": "Время выполнения (прокси)",
+        "name_ru": "Время выполнения",
         "group": "task_effectiveness",
         "format": "seconds",
         "thresholds": {"green": 60, "yellow": 120},
@@ -212,12 +245,12 @@ METRICS_DISPLAY = {
     },
     # === Group 2: Interface Quality (M8-M9) ===
     "M8_interface_issues": {
-        "name_ru": "Проблемы интерфейса (по серьёзности)",
+        "name_ru": "Проблемы интерфейса",
         "group": "interface_quality",
         "format": "issues_breakdown",  # composite display
     },
     "M9_issue_overlap": {
-        "name_ru": "Пересечение с пользователями (precision/recall)",
+        "name_ru": "Пересечение с реальными пользователями",
         "group": "interface_quality",
         "format": "overlap_placeholder",
     },

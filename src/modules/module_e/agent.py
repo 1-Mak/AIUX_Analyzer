@@ -188,17 +188,14 @@ class ModuleE:
 
 async def demo_module_e():
     """Demo function to test Module E"""
-    from pathlib import Path
+    from src.config import SESSIONS_DIR
 
-    # Find a session with audit results
-    screenshots_dir = Path("screenshots")
-
-    if not screenshots_dir.exists():
-        print("No screenshots directory found")
+    if not SESSIONS_DIR.exists():
+        print("No sessions directory found")
         return
 
     # Find latest session with audit results
-    audit_files = list(screenshots_dir.glob("*/audit_results.json"))
+    audit_files = list(SESSIONS_DIR.glob("*/audit_results.json"))
 
     if not audit_files:
         print("No audit_results.json found in any session")

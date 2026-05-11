@@ -158,7 +158,7 @@ UX_AI_Audit/
 │       └── deepseek_helper.py      # DeepSeek API интеграция
 │
 ├── data/
-│   ├── screenshots/       # Скриншоты сессий
+│   ├── sessions/         # Результаты сессий аудита (скриншоты, JSON, отчёты)
 │   └── reports/          # Итоговые отчеты
 │
 └── tests/                # Тесты

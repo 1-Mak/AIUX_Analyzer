@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import (
     validate_config,
-    SCREENSHOTS_DIR,
+    SESSIONS_DIR,
     REPORTS_DIR,
     LOG_FILE,
     OPENAI_MODEL,
@@ -42,9 +42,12 @@ class UXAuditOrchestrator:
         self.config = config
         self.url = config.get("url")
         self.task = config.get("task")
-        self.persona = config.get("persona", "Elderly User")
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = SCREENSHOTS_DIR / self.session_id
+        self.persona = config.get("persona", "student")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        scenario_id = str(config.get("scenario_id") or "noscn").strip().replace(" ", "_")
+        persona_slug = str(self.persona or "user").strip().replace(" ", "_")
+        self.session_id = f"{ts}_{scenario_id}_{persona_slug}"
+        self.session_dir = SESSIONS_DIR / self.session_id
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         # Results from each module
@@ -73,12 +76,12 @@ class UXAuditOrchestrator:
             print("\n[STAGE 1] Capturing baseline data...")
             await self._capture_baseline()
 
-            # Stage 2: Module A - Visual Analysis
-            print("\n[STAGE 2] Module A: Visual Inspector")
-            await self._run_module_a()
-
-            # Stage 3: Module B - Behavioral Simulation
+            # Stage 2: Module B - Behavioral Simulation (produces step_*.png screenshots)
             await self._run_module_b()
+
+            # Stage 3: Module A - Visual Analysis over the session screenshots from Module B
+            print("\n[STAGE 3] Module A: Visual Inspector")
+            await self._run_module_a()
 
             # Stage 4: Module C - Code Auditing (Accessibility)
             await self._run_module_c()
@@ -147,25 +150,34 @@ class UXAuditOrchestrator:
             }
 
     async def _run_module_a(self):
-        """Run Module A - Visual Inspector"""
+        """Run Module A - Visual Inspector over session screenshots from Module B."""
         try:
-            screenshot_path = self.session_dir / "baseline_screenshot.png"
+            # Prefer the per-step screenshots emitted by Module B; fall back to baseline only
+            step_screenshots = sorted(self.session_dir.glob("step_*_screenshot.png"))
 
-            if not screenshot_path.exists():
-                print("  ⚠ Screenshot not found, skipping Module A")
-                return
-
-            # Initialize Module A
             print(f"  → Initializing {OPENAI_MODEL} (OpenAI Vision)...")
             module_a = ModuleA()
 
-            # Run analysis
-            print(f"  → Analyzing UI with persona: {self.persona}...")
-            result = module_a.analyze_screenshot(
-                screenshot_path=screenshot_path,
-                persona_name=self.persona,
-                session_dir=self.session_dir
-            )
+            if step_screenshots:
+                print(f"  → Анализ {len(step_screenshots)} скриншотов сессии (персона: {self.persona})...")
+                result = module_a.analyze_session_screenshots(
+                    screenshots=step_screenshots,
+                    persona_name=self.persona,
+                    session_dir=self.session_dir,
+                )
+            else:
+                # Fallback: no step screenshots (Module B failed or skipped) — analyze baseline only
+                baseline = self.session_dir / "baseline_screenshot.png"
+                if not baseline.exists():
+                    print("  ⚠ Скриншоты сессии и baseline отсутствуют, пропуск Module A")
+                    self.results["module_a_results"] = {"skipped": "no_screenshots"}
+                    return
+                print(f"  → Step-скриншоты не найдены, анализ только baseline...")
+                result = module_a.analyze_screenshot(
+                    screenshot_path=baseline,
+                    persona_name=self.persona,
+                    session_dir=self.session_dir,
+                )
 
             # Store results
             self.results["module_a_results"] = {
@@ -174,16 +186,18 @@ class UXAuditOrchestrator:
                     "critical": result["summary"]["critical"],
                     "high": result["summary"]["high"],
                     "medium": result["summary"]["medium"],
-                    "low": result["summary"]["low"]
+                    "low": result["summary"]["low"],
                 },
                 "overall_assessment": result["summary"]["overall_assessment"],
-                "issues_file": str(self.session_dir / "module_a_visual_analysis.json")
+                "issues_file": str(self.session_dir / "module_a_visual_analysis.json"),
+                "screenshots_analyzed": len(step_screenshots) if step_screenshots else 1,
             }
 
-            # Print summary
-            module_a.print_summary(result)
+            # Console summary (only for single-screenshot mode; aggregated mode is summarized in JSON)
+            if not step_screenshots:
+                module_a.print_summary(result)
 
-            print(f"  ✓ Module A complete")
+            print(f"  ✓ Module A завершён ({result['summary']['total_issues']} проблем после дедупликации)")
 
         except Exception as e:
             print(f"  ✗ Module A failed: {e}")
@@ -320,6 +334,9 @@ class UXAuditOrchestrator:
                 "trend": result["summary"]["trend"],
                 "distribution": result["summary"]["distribution"],
                 "pain_points_count": len(result["pain_points"]),
+                "pain_points_by_cause": result["summary"].get("pain_points_by_cause", {}),
+                "step_scores": result["summary"].get("step_scores", []),
+                "step_trajectory": result["summary"].get("step_trajectory", []),
                 "insights": result["insights"],
                 "analysis_file": str(self.session_dir / "module_d_sentiment_analysis.json")
             }

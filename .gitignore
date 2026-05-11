@@ -47,11 +47,10 @@ logs/
 *.log
 
 # Data directories
-data/screenshots/*
-!data/screenshots/.gitkeep
+data/sessions/*
+!data/sessions/.gitkeep
 data/reports/*
 !data/reports/.gitkeep
-screenshots/
 
 # Playwright
 .playwright/
